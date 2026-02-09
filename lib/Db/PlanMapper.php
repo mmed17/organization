@@ -6,6 +6,7 @@ namespace OCA\Organization\Db;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Db\Entity;
 use OCP\AppFramework\Db\QBMapper;
+use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
 use Psr\Log\LoggerInterface;
 
@@ -68,12 +69,42 @@ class PlanMapper extends QBMapper
                 'private_storage_per_user' => $qb->createNamedParameter($plan->getPrivateStoragePerUser(), \PDO::PARAM_INT),
                 'price' => $qb->createNamedParameter($plan->getPrice()),
                 'currency' => $qb->createNamedParameter($plan->getCurrency()),
-                'is_public' => $qb->createNamedParameter($plan->getIsPublic(), \PDO::PARAM_BOOL)
+                'is_public' => $qb->createNamedParameter($plan->getIsPublic(), IQueryBuilder::PARAM_BOOL)
             ]);
 
         $qb->executeStatement();
 
         $plan->setId($qb->getLastInsertId());
+
+        return $plan;
+    }
+
+    /**
+     * Custom update method to handle boolean is_public correctly.
+     *
+     * @param Plan $plan The entity to update.
+     * @return Plan The updated entity.
+     */
+    public function update(Entity $plan): Plan
+    {
+        if (!$plan instanceof Plan) {
+            throw new \InvalidArgumentException('Entity must be an instance of Plan');
+        }
+
+        $qb = $this->db->getQueryBuilder();
+
+        $qb->update($this->getTableName())
+            ->set('name', $qb->createNamedParameter($plan->getName()))
+            ->set('max_members', $qb->createNamedParameter($plan->getMaxMembers(), \PDO::PARAM_INT))
+            ->set('max_projects', $qb->createNamedParameter($plan->getMaxProjects(), \PDO::PARAM_INT))
+            ->set('shared_storage_per_project', $qb->createNamedParameter($plan->getSharedStoragePerProject(), \PDO::PARAM_INT))
+            ->set('private_storage_per_user', $qb->createNamedParameter($plan->getPrivateStoragePerUser(), \PDO::PARAM_INT))
+            ->set('price', $qb->createNamedParameter($plan->getPrice()))
+            ->set('currency', $qb->createNamedParameter($plan->getCurrency()))
+            ->set('is_public', $qb->createNamedParameter($plan->getIsPublic(), IQueryBuilder::PARAM_BOOL))
+            ->where($qb->expr()->eq('id', $qb->createNamedParameter($plan->getId(), \PDO::PARAM_INT)));
+
+        $qb->executeStatement();
 
         return $plan;
     }
@@ -86,7 +117,7 @@ class PlanMapper extends QBMapper
     {
         $qb = $this->db->getQueryBuilder();
         $qb->select('*')->from($this->getTableName())->where(
-            $qb->expr()->eq('is_public', $qb->createNamedParameter(true, \PDO::PARAM_BOOL))
+            $qb->expr()->eq('is_public', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL))
         );
         return $this->findEntities($qb);
     }

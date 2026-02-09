@@ -6,6 +6,7 @@ namespace OCA\Organization\Migration;
 
 use Closure;
 use OCP\DB\ISchemaWrapper;
+use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\DB\Types;
 use OCP\IDBConnection;
 use OCP\Migration\IOutput;
@@ -66,7 +67,7 @@ class Version010001Date20260203000001 extends SimpleMigrationStep
                 'default' => 'EUR',
             ]);
             $table->addColumn('is_public', Types::BOOLEAN, [
-                'notnull' => true,
+                'notnull' => false,
                 'default' => false,
             ]);
 
@@ -112,7 +113,7 @@ class Version010001Date20260203000001 extends SimpleMigrationStep
                     'private_storage_per_user' => $qb->createNamedParameter($plan[4], \PDO::PARAM_INT),
                     'price' => $qb->createNamedParameter($plan[5]),
                     'currency' => $qb->createNamedParameter($plan[6]),
-                    'is_public' => $qb->createNamedParameter($plan[7], \PDO::PARAM_BOOL),
+                    'is_public' => $qb->createNamedParameter($plan[7], IQueryBuilder::PARAM_BOOL),
                 ])
                 ->executeStatement();
         }

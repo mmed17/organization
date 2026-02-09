@@ -21,8 +21,8 @@ use OCP\DB\Types;
  * @method void setPrice(float $price)
  * @method string|null getCurrency()
  * @method void setCurrency(string $currency)
- * @method bool getIsPublic()
- * @method void setIsPublic(bool $isPublic)
+ * @method bool|null getIsPublic()
+ * @method void setIsPublic(?bool $isPublic)
  */
 class Plan extends Entity implements \JsonSerializable
 {
@@ -47,8 +47,8 @@ class Plan extends Entity implements \JsonSerializable
     /** @var string The currency code for the plan price. */
     protected string $currency = 'EUR';
 
-    /** @var bool Whether to show this plan on the public pricing page. */
-    protected bool $isPublic = false;
+    /** @var bool|null Whether to show this plan on the public pricing page. */
+    protected ?bool $isPublic = false;
 
     public function __construct()
     {
@@ -59,7 +59,7 @@ class Plan extends Entity implements \JsonSerializable
         $this->addType('private_storage_per_user', Types::INTEGER);
         $this->addType('price', Types::FLOAT, true);
         $this->addType('currency', Types::STRING, true);
-        $this->addType('is_public', Types::BOOLEAN);
+        $this->addType('is_public', Types::BOOLEAN, true);
     }
 
     public function jsonSerialize(): array
