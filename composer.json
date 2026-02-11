@@ -1,0 +1,37 @@
+{
+	"name": "oca/organization",
+	"description": "Multi-tenant organization management for Nextcloud",
+	"license": "AGPL-3.0-or-later",
+	"type": "nextcloud-app",
+	"authors": [
+		{
+			"name": "Custom Development"
+		}
+	],
+	"require": {
+		"php": "^8.2"
+	},
+	"require-dev": {
+		"nextcloud/coding-standard": "^1.2",
+		"nextcloud/ocp": "dev-master",
+		"phpunit/phpunit": "^10.5",
+		"vimeo/psalm": "^5.20"
+	},
+	"autoload": {
+		"psr-4": {
+			"OCA\\Organization\\": "lib/"
+		}
+	},
+	"autoload-dev": {
+		"psr-4": {
+			"OCA\\Organization\\Tests\\": "tests/"
+		}
+	},
+	"scripts": {
+		"cs:check": "php-cs-fixer fix --dry-run --diff",
+		"cs:fix": "php-cs-fixer fix",
+		"lint": "find lib -name \"*.php\" -exec php -l {} \\;",
+		"test": "phpunit",
+		"psalm": "psalm"
+	}
+}

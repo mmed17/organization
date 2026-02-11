@@ -5,7 +5,11 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 return [
+    'routes' => [
+        ['name' => 'Page#index', 'url' => '/', 'verb' => 'GET'],
+    ],
     'ocs' => [
+
         // Organizations
         ['root' => '/apps/organization', 'name' => 'Organization#getOrganizations', 'url' => '/organizations', 'verb' => 'GET'],
         ['root' => '/apps/organization', 'name' => 'Organization#getOrganization', 'url' => '/organizations/{organizationId}', 'verb' => 'GET', 'requirements' => ['organizationId' => '.+']],

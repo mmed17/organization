@@ -24,7 +24,16 @@ This application provides organization management functionality including:
         <prevent_group_restriction/>
     </types>
     <category>organization</category>
+    <navigations>
+        <navigation>
+            <name>Organizations</name>
+            <route>organization.Page.index</route>
+            <icon>organization.svg</icon>
+            <order>10</order>
+        </navigation>
+    </navigations>
     <dependencies>
+
         <nextcloud min-version="31" max-version="32"/>
     </dependencies>
     <background-jobs>

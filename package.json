@@ -1,0 +1,37 @@
+{
+  "name": "organization",
+  "version": "1.0.0",
+  "description": "Nextcloud Organization App",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint src --ext .js,.vue,.ts",
+    "type-check": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@nextcloud/axios": "^2.5.0",
+    "@nextcloud/initial-state": "^2.1.0",
+    "@nextcloud/l10n": "^3.1.0",
+    "@nextcloud/router": "^3.0.1",
+    "@nextcloud/vue": "^9.0.0-beta.5",
+    "vue": "^3.4.0",
+    "vue-material-design-icons": "^5.3.0"
+  },
+  "devDependencies": {
+    "@nextcloud/eslint-config": "^8.4.1",
+    "@nextcloud/browserslist-config": "^3.0.1",
+    "@nextcloud/typings": "^1.9.1",
+    "@nextcloud/vite-config": "^2.5.2",
+    "@types/node": "^20.11.0",
+    "@vue/tsconfig": "^0.7.0",
+    "sass": "^1.81.0",
+    "typescript": "^5.3.3",
+    "vite": "^7.1.10",
+    "vue-tsc": "^2.0.0"
+  },
+  "browserslist": [
+    "extends @nextcloud/browserslist-config"
+  ]
+}
