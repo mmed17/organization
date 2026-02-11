@@ -6,34 +6,29 @@ namespace OCA\Organization\Db;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Db\QBMapper;
 use OCP\IDBConnection;
-use OCP\IGroupManager;
 use Psr\Log\LoggerInterface;
 
 class OrganizationMapper extends QBMapper
 {
     public function __construct(
         IDBConnection $db,
-        private IGroupManager $groupManager,
         private LoggerInterface $logger
     ) {
         parent::__construct($db, 'organizations', Organization::class);
     }
 
     /**
-     * Finds an organization by its corresponding Nextcloud group ID.
+     * Finds an organization by its ID.
      *
-     * @param string $groupId The Nextcloud group ID.
+     * @param int $id The organization ID.
      * @return Organization|null
      */
-    public function findByGroupId(string $groupId): ?Organization
+    public function find(int $id): ?Organization
     {
         $qb = $this->db->getQueryBuilder();
         $qb->select('*')
             ->from($this->getTableName())
-            ->where($qb->expr()->eq(
-                'nextcloud_group_id',
-                $qb->createNamedParameter($groupId)
-            ));
+            ->where($qb->expr()->eq('id', $qb->createNamedParameter($id, \PDO::PARAM_INT)));
 
         try {
             return $this->findEntity($qb);
@@ -69,61 +64,6 @@ class OrganizationMapper extends QBMapper
         } catch (DoesNotExistException $e) {
             return null;
         }
-    }
-
-    /**
-     * Retrieves all groups for a user that are linked to an organization.
-     *
-     * @param string $userId The user ID.
-     * @return \OCP\IGroup[] An array of IGroup objects.
-     */
-    public function findOrganizationGroupsForUser(string $userId): array
-    {
-        $qb = $this->db->getQueryBuilder();
-
-        $qb->select('g.gid')
-            ->from('groups', 'g')
-            ->innerJoin(
-                'g',
-                'group_user',
-                'gu',
-                $qb->expr()->eq('g.gid', 'gu.gid')
-            )
-            ->innerJoin(
-                'g',
-                'organizations',
-                'o',
-                $qb->expr()->eq('g.gid', 'o.nextcloud_group_id')
-            )
-            ->where(
-                $qb->expr()->eq('gu.uid', $qb->createNamedParameter($userId))
-            );
-
-        $groupIds = [];
-        try {
-            $result = $qb->executeQuery();
-            $groupIds = $result->fetchAll(\PDO::FETCH_COLUMN, 0);
-            $result->closeCursor();
-        } catch (\Exception $e) {
-            $this->logger->error(
-                'Could not retrieve organization groups for user: ' . $e->getMessage(),
-                [
-                    'app' => 'organization',
-                    'exception' => $e
-                ]
-            );
-            return [];
-        }
-
-        $groupObjects = [];
-        foreach ($groupIds as $gid) {
-            $group = $this->groupManager->get((string) $gid);
-            if ($group !== null) {
-                $groupObjects[] = $group;
-            }
-        }
-
-        return $groupObjects;
     }
 
     /**
@@ -183,11 +123,9 @@ class OrganizationMapper extends QBMapper
 
     /**
      * Finds all organizations with their subscription and plan data.
-     * Organizations are the primary entity - this is the main listing method.
      *
      * @param string $search Search term for organization name
      * @param int|null $limit Maximum results
-     * @param int $offset Pagination offset
      * @param int $offset Pagination offset
      * @return array Array of organization data with subscription info
      */
@@ -198,7 +136,6 @@ class OrganizationMapper extends QBMapper
         $qb->select(
             'o.id',
             'o.name',
-            'o.nextcloud_group_id',
             's.id as subscription_id',
             's.status as subscription_status',
             's.started_at',
@@ -250,35 +187,5 @@ class OrganizationMapper extends QBMapper
         $result->closeCursor();
 
         return $count;
-    }
-
-
-
-    /**
-     * Finds the organization group ID for a user.
-     */
-    public function findOrganizationGroupIdForUser(string $userId): ?string
-    {
-        $query = $this->db->getQueryBuilder();
-        $expr = $query->expr();
-
-        $query->select('o.nextcloud_group_id')
-            ->from('users', 'u')
-            ->innerJoin(
-                'u',
-                'organizations',
-                'o',
-                $expr->eq('u.organization_id', 'o.id')
-            )
-            ->where(
-                $expr->eq('u.uid', $query->createParameter('user_id'))
-            );
-
-        $query->setParameter('user_id', $userId);
-
-        $result = $query->executeQuery();
-        $gid = $result->fetchOne();
-
-        return ($gid === false) ? null : (string) $gid;
     }
 }

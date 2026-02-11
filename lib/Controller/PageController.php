@@ -29,8 +29,8 @@ class PageController extends Controller {
             'appId' => $this->appName,
         ]);
 
-        Util::addScript($this->appName, 'js/organization-main');
-        Util::addStyle($this->appName, 'css/organization-main');
+        Util::addScript($this->appName, 'organization-main');
+        Util::addStyle($this->appName, 'organization-main');
 
         return new TemplateResponse($this->appName, 'index');
     }

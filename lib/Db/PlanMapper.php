@@ -110,7 +110,51 @@ class PlanMapper extends QBMapper
     }
 
     /**
+     * Finds all plans for admin management.
+     *
+     * @param string $search
+     * @param int|null $limit
+     * @param int $offset
+     * @return Plan[]
+     */
+    public function findAllAdmin(string $search = '', ?int $limit = null, int $offset = 0): array
+    {
+        $qb = $this->db->getQueryBuilder();
+        $qb->select('*')->from($this->getTableName());
+
+        if ($search !== '') {
+            $qb->where($qb->expr()->iLike('name', $qb->createNamedParameter(
+                '%' . $this->db->escapeLikeParameter($search) . '%'
+            )));
+        }
+
+        if ($limit !== null) {
+            $qb->setMaxResults($limit);
+        }
+        $qb->setFirstResult($offset);
+
+        return $this->findEntities($qb);
+    }
+
+    /**
+     * Counts how many subscriptions use this plan.
+     *
+     * @param int $planId
+     * @return int
+     */
+    public function countSubscriptions(int $planId): int
+    {
+        $qb = $this->db->getQueryBuilder();
+        $qb->select($qb->func()->count('*'))
+            ->from('subscriptions')
+            ->where($qb->expr()->eq('plan_id', $qb->createNamedParameter($planId, \PDO::PARAM_INT)));
+
+        return (int)$qb->executeQuery()->fetchOne();
+    }
+
+    /**
      * Finds all public plans.
+
      * @return Plan[]
      */
     public function findAll(): array

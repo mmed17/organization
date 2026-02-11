@@ -85,7 +85,7 @@ class SubscriptionService
      * Updates an organization's subscription.
      */
     public function updateSubscription(
-        string $groupId,
+        int $organizationId,
         string $displayName,
         int $newPlanId,
         int $maxMembers,
@@ -99,7 +99,7 @@ class SubscriptionService
         string $changedByUserId
     ) {
         // 1. Find the organization and subscription
-        $organization = $this->organizationMapper->findByGroupId($groupId);
+        $organization = $this->organizationMapper->find($organizationId);
         if ($organization === null) {
             throw new OCSNotFoundException('Organization does not exist');
         }

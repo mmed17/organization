@@ -1,0 +1,385 @@
+<template>
+	<NcModal
+		v-if="show"
+		title="Create New Organization"
+		size="large"
+		class="create-org-modal"
+		@close="closeModal">
+		<div class="modal-content">
+			<div class="modal-body-grid">
+				<!-- Left Column: Identity & Contact -->
+				<div class="grid-column">
+					<!-- Organization Details -->
+					<div class="form-section">
+						<div class="section-header">
+							<AccountGroup :size="20" class="section-icon" />
+							<h3>Organization Details</h3>
+						</div>
+						<div class="section-body">
+							<NcTextField
+								v-model="newOrg.displayname"
+								label="Organization Name"
+								:error="!!errors.displayname"
+								:helper-text="errors.displayname"
+								required
+								class="full-width" />
+						</div>
+					</div>
+
+					<!-- Contact Information -->
+					<div class="form-section">
+						<div class="section-header">
+							<CardAccountDetails :size="20" class="section-icon" />
+							<h3>Contact Information</h3>
+						</div>
+						<div class="section-body grid-2-tight">
+							<NcTextField
+								v-model="newOrg.contactFirstName"
+								label="First Name" />
+							<NcTextField
+								v-model="newOrg.contactLastName"
+								label="Last Name" />
+							<NcTextField
+								v-model="newOrg.contactEmail"
+								label="Email"
+								type="email">
+								<template #leading-icon>
+									<Email :size="16" />
+								</template>
+							</NcTextField>
+							<NcTextField
+								v-model="newOrg.contactPhone"
+								label="Phone"
+								type="tel">
+								<template #leading-icon>
+									<Phone :size="16" />
+								</template>
+							</NcTextField>
+						</div>
+					</div>
+				</div>
+
+				<!-- Right Column: Plan & Limits -->
+				<div class="grid-column">
+					<!-- Subscription Plan -->
+					<div class="form-section">
+						<div class="section-header">
+							<Briefcase :size="20" class="section-icon" />
+							<h3>Billing & Plan</h3>
+						</div>
+						<div class="section-body">
+							<div class="form-row">
+								<label class="nc-label-text">Subscription Plan</label>
+								<div class="select-wrapper">
+									<select v-model="newOrg.planId" class="nc-select-native" @change="onPlanChange">
+										<option :value="null">Custom Plan</option>
+										<option v-for="plan in plans" :key="plan.id" :value="plan.id">
+											{{ plan.name }}
+										</option>
+									</select>
+								</div>
+							</div>
+							<div class="form-row">
+								<label class="nc-label-text">Validity Period</label>
+								<div class="select-wrapper">
+									<select v-model="newOrg.validity" class="nc-select-native">
+										<option value="1 month">1 Month</option>
+										<option value="1 year">1 Year</option>
+									</select>
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<!-- Resource Allocation -->
+					<div class="form-section">
+						<div class="section-header">
+							<Database :size="20" class="section-icon" />
+							<h3>Resource Allocation</h3>
+						</div>
+						<div class="section-body grid-2-tight">
+							<NcTextField
+								v-model.number="newOrg.memberLimit"
+								label="Max Members"
+								type="number" />
+							<NcTextField
+								v-model.number="newOrg.projectsLimit"
+								label="Max Projects"
+								type="number" />
+							<NcTextField
+								v-model.number="sharedStorageGB"
+								label="Shared Storage (GB)"
+								type="number"
+								:min="0" />
+							<NcTextField
+								v-model.number="privateStorageGB"
+								label="Private Storage (GB)"
+								type="number"
+								:min="0" />
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<div class="modal-actions">
+				<NcButton @click="closeModal" type="tertiary">Cancel</NcButton>
+				<NcButton type="primary" @click="handleCreate" :disabled="submitting">
+					<template #icon v-if="submitting">
+						<NcLoadingIcon :size="20" />
+					</template>
+					{{ submitting ? 'Creating...' : 'Create Organization' }}
+				</NcButton>
+			</div>
+		</div>
+	</NcModal>
+</template>
+
+<script setup lang="ts">
+import { ref, reactive, watch, computed } from 'vue'
+import { NcModal, NcTextField, NcButton, NcLoadingIcon } from '@nextcloud/vue'
+import axios from '@nextcloud/axios'
+import { generateOcsUrl } from '@nextcloud/router'
+import { confirmPassword } from '@nextcloud/password-confirmation'
+
+// Icons
+import AccountGroup from 'vue-material-design-icons/AccountGroup.vue'
+import CardAccountDetails from 'vue-material-design-icons/CardAccountDetails.vue'
+import Briefcase from 'vue-material-design-icons/Briefcase.vue'
+import Database from 'vue-material-design-icons/Database.vue'
+import Email from 'vue-material-design-icons/Email.vue'
+import Phone from 'vue-material-design-icons/Phone.vue'
+
+const props = defineProps<{
+	show: boolean
+	plans: any[]
+}>()
+
+const emit = defineEmits(['close', 'success'])
+
+const submitting = ref(false)
+
+const errors = reactive({
+	displayname: '',
+})
+
+const defaultNewOrg = {
+	displayname: '',
+	contactFirstName: '',
+	contactLastName: '',
+	contactEmail: '',
+	contactPhone: '',
+	validity: '1 year',
+	planId: null,
+	memberLimit: 10,
+	projectsLimit: 5,
+	sharedStoragePerProject: 1073741824, // 1GB
+	privateStorage: 5368709120, // 5GB
+	price: 0,
+	currency: 'EUR'
+}
+
+const newOrg = reactive({ ...defaultNewOrg })
+
+// Computed properties for storage conversion (Bytes <-> GB)
+const sharedStorageGB = computed({
+	get: () => parseFloat((newOrg.sharedStoragePerProject / (1024 ** 3)).toFixed(2)),
+	set: (val) => {
+		newOrg.sharedStoragePerProject = Math.round(val * (1024 ** 3))
+	}
+})
+
+const privateStorageGB = computed({
+	get: () => parseFloat((newOrg.privateStorage / (1024 ** 3)).toFixed(2)),
+	set: (val) => {
+		newOrg.privateStorage = Math.round(val * (1024 ** 3))
+	}
+})
+
+watch(() => props.show, (val) => {
+	if (val) {
+		Object.assign(newOrg, defaultNewOrg)
+		errors.displayname = ''
+	}
+})
+
+const closeModal = () => {
+	emit('close')
+}
+
+const onPlanChange = () => {
+	if (newOrg.planId) {
+		const plan = props.plans.find(p => p.id === newOrg.planId)
+		if (plan) {
+			// Future: Logic to populate limits from plan
+		}
+	}
+}
+
+const handleCreate = async () => {
+	errors.displayname = !newOrg.displayname ? 'Name is required' : ''
+	
+	if (errors.displayname) return
+
+	submitting.value = true
+	try {
+		await confirmPassword()
+		await axios.post(generateOcsUrl('apps/organization/organizations'), newOrg)
+		emit('success')
+		closeModal()
+	} catch (error) {
+		console.error('Failed to create organization', error)
+	} finally {
+		submitting.value = false
+	}
+}
+</script>
+
+<style scoped>
+.modal-content {
+	display: flex;
+	flex-direction: column;
+	gap: 24px;
+	padding: 8px 4px;
+}
+
+/* Grid Layout */
+.modal-body-grid {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: 24px;
+}
+
+@media (min-width: 900px) {
+	.modal-body-grid {
+		grid-template-columns: 1fr 1fr;
+		gap: 32px;
+	}
+}
+
+.grid-column {
+	display: flex;
+	flex-direction: column;
+	gap: 24px;
+}
+
+.grid-2-tight {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: 12px;
+}
+
+@media (min-width: 600px) {
+	.grid-2-tight {
+		grid-template-columns: 1fr 1fr;
+	}
+}
+
+/* Sections */
+.form-section {
+	background-color: var(--color-background-translucent);
+	border: 1px solid var(--color-border);
+	border-radius: var(--border-radius-large);
+	padding: 20px;
+	transition: box-shadow 0.2s ease;
+}
+
+.form-section:hover {
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.section-header {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 20px;
+	border-bottom: 1px solid var(--color-border);
+	padding-bottom: 12px;
+}
+
+.section-icon {
+	color: var(--color-primary);
+	display: flex;
+	align-items: center;
+}
+
+.section-header h3 {
+	margin: 0;
+	font-size: 1.1em;
+	font-weight: 700;
+	color: var(--color-main-text);
+}
+
+.section-body {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+/* Form Elements */
+.full-width {
+	width: 100%;
+}
+
+.form-row {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.nc-label-text {
+	font-weight: 600;
+	font-size: 0.9em;
+	color: var(--color-text-maxcontrast);
+	margin-left: 2px;
+}
+
+.select-wrapper {
+	position: relative;
+}
+
+.nc-select-native {
+	width: 100%;
+	padding: 8px 32px 8px 12px;
+	border: 1px solid var(--color-border-dark);
+	border-radius: var(--border-radius);
+	background-color: var(--color-main-background);
+	color: var(--color-main-text);
+	font-size: 1em;
+	line-height: 1.5;
+	height: auto;
+	transition: border-color 0.2s;
+	appearance: none;
+	-webkit-appearance: none;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='16' height='16'%3E%3Cpath fill='none' stroke='%23888' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+	background-repeat: no-repeat;
+	background-position: right 12px center;
+	cursor: pointer;
+}
+
+.nc-select-native:focus {
+	border-color: var(--color-primary);
+	outline: 2px solid var(--color-primary-element);
+	outline-offset: -1px;
+}
+
+/* Actions */
+.modal-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 16px;
+	margin-top: 8px;
+	padding-top: 24px;
+	border-top: 1px solid var(--color-border);
+}
+
+/* Mobile optimizations */
+@media (max-width: 600px) {
+	.modal-body-grid {
+		gap: 16px;
+	}
+	
+	.form-section {
+		padding: 16px;
+	}
+}
+</style>

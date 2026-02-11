@@ -5,9 +5,6 @@ export default createAppConfig({
 	main: join(import.meta.dirname, 'src', 'main.ts'),
 }, {
 	config: {
-		build: {
-			outDir: 'js',
-		},
 		server: {
 			hmr: {
 				protocol: 'ws',

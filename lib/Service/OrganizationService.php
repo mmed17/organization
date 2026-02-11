@@ -5,50 +5,38 @@ namespace OCA\Organization\Service;
 
 use OCA\Organization\Db\Organization;
 use OCA\Organization\Db\OrganizationMapper;
-use OCP\IGroupManager;
 
 class OrganizationService
 {
     public function __construct(
         private OrganizationMapper $organizationMapper,
-        private IGroupManager $groupManager,
     ) {
     }
 
     /**
-     * Creates a new organization with the given Nextcloud group ID.
-     * First creates the Nextcloud group, then creates the organization record.
-     * 
-     * @param string $groupId The group ID (also used as Nextcloud group ID)
-     * @param string $displayName The display name for the group
+     * Creates a new organization.
+     *
+     * @param string $name The display name for the organization
+     * @param string|null $contactFirstName First name of the contact person
+     * @param string|null $contactLastName Last name of the contact person
+     * @param string|null $contactEmail Email of the contact person
+     * @param string|null $contactPhone Phone of the contact person
      * @return Organization
-     * @throws \Exception If group creation fails
      */
-    public function createOrganization(string $groupId, string $displayName): Organization
-    {
-        // Check if group already exists
-        $existingGroup = $this->groupManager->get($groupId);
-        if ($existingGroup !== null) {
-            throw new \Exception('Group already exists: ' . $groupId);
-        }
-
-        // Create the Nextcloud group first
-        $group = $this->groupManager->createGroup($groupId);
-        if ($group === null) {
-            throw new \Exception('Failed to create Nextcloud group: ' . $groupId);
-        }
-
-        // Set display name if provided
-        if (!empty($displayName)) {
-            $group->setDisplayName($displayName);
-        }
-
-        // Now create the organization record
+    public function createOrganization(
+        string $name,
+        ?string $contactFirstName = null,
+        ?string $contactLastName = null,
+        ?string $contactEmail = null,
+        ?string $contactPhone = null
+    ): Organization {
         $organization = new Organization();
-        $organization->setNextcloudGroupId($groupId);
-        $organization->setName($displayName ?: $groupId);
+        $organization->setName($name);
+        $organization->setContactFirstName($contactFirstName);
+        $organization->setContactLastName($contactLastName);
+        $organization->setContactEmail($contactEmail);
+        $organization->setContactPhone($contactPhone);
 
-        $this->organizationMapper->insert($organization);
-        return $organization;
+        return $this->organizationMapper->insert($organization);
     }
 }

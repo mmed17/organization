@@ -9,7 +9,6 @@ use OCP\AppFramework\OCSController;
 use OCP\IRequest;
 use OCP\IUserSession;
 use OCP\IDBConnection;
-use OCP\IGroupManager;
 use OCA\Organization\Db\OrganizationMapper;
 use OCA\Organization\Db\SubscriptionMapper;
 use OCA\Organization\Db\PlanMapper;
@@ -36,7 +35,6 @@ class OrganizationController extends OCSController
         private SubscriptionService $subscriptionService,
         private IUserSession $userSession,
         private IDBConnection $db,
-        private IGroupManager $groupManager,
         private LoggerInterface $logger
     ) {
         parent::__construct($appName, $request);
@@ -61,8 +59,7 @@ class OrganizationController extends OCSController
             $userCount = $this->organizationMapper->getUserCountById((int) $row['id']);
 
             $organizations[] = [
-                'id' => $row['nextcloud_group_id'],  // Frontend uses group ID as identifier
-                'organizationId' => (int) $row['id'],
+                'id' => (int) $row['id'],
                 'displayname' => $row['name'],
                 'usercount' => $userCount,
                 'disabled' => 0,
@@ -88,18 +85,16 @@ class OrganizationController extends OCSController
     /**
      * Get organization details including subscription and plan.
      *
-     * @param string $organizationId ID of the organization (uses nextcloud_group_id for lookup)
+     * @param int $organizationId ID of the organization
      * @return DataResponse
      * @throws OCSNotFoundException
      */
     #[NoAdminRequired]
-    public function getOrganization(string $organizationId): DataResponse
+    public function getOrganization(int $organizationId): DataResponse
     {
-        $organizationId = urldecode($organizationId);
-
-        $organization = $this->organizationMapper->findByGroupId($organizationId);
+        $organization = $this->organizationMapper->find($organizationId);
         if ($organization === null) {
-            throw new OCSNotFoundException('Organization does not exist for the given group');
+            throw new OCSNotFoundException('Organization does not exist');
         }
 
         $subscription = $this->subscriptionMapper->findByOrganizationId($organization->getId());
@@ -113,11 +108,7 @@ class OrganizationController extends OCSController
         }
 
         return new DataResponse([
-            'organization' => [
-                'id' => $organization->getId(),
-                'name' => $organization->getName(),
-                'nextcloud_group_id' => $organization->getNextcloudGroupId(),
-            ],
+            'organization' => $organization,
             'subscription' => $subscription,
             'plan' => $plan,
         ]);
@@ -126,7 +117,6 @@ class OrganizationController extends OCSController
     /**
      * Create a new organization with subscription.
      *
-     * @param string $groupid ID of the group
      * @param string $validity Duration string (e.g., "1 year")
      * @param int|null $memberLimit Max members
      * @param int|null $projectsLimit Max projects
@@ -136,13 +126,16 @@ class OrganizationController extends OCSController
      * @param float|null $price Price
      * @param string|null $currency Currency code
      * @param string|null $displayname Display name
+     * @param string|null $contactFirstName First name of contact person
+     * @param string|null $contactLastName Last name of contact person
+     * @param string|null $contactEmail Email of contact person
+     * @param string|null $contactPhone Phone of contact person
      * @return DataResponse
      * @throws OCSException
      */
     #[AuthorizedAdminSetting(settings: Users::class)]
     #[PasswordConfirmationRequired]
     public function createOrganization(
-        string $groupid,
         string $validity,
         ?int $memberLimit,
         ?int $projectsLimit,
@@ -151,19 +144,22 @@ class OrganizationController extends OCSController
         ?int $planId,
         ?float $price,
         ?string $currency = 'EUR',
-        ?string $displayname = ''
+        ?string $displayname = '',
+        ?string $contactFirstName = null,
+        ?string $contactLastName = null,
+        ?string $contactEmail = null,
+        ?string $contactPhone = null
     ): DataResponse {
-
-        if (empty($groupid)) {
-            throw new OCSException('Invalid group name', 101);
-        }
 
         try {
             $this->db->beginTransaction();
 
             $organization = $this->organizationService->createOrganization(
-                $groupid,
-                $displayname
+                $displayname,
+                $contactFirstName,
+                $contactLastName,
+                $contactEmail,
+                $contactPhone
             );
 
             if ($organization === null) {
@@ -194,7 +190,7 @@ class OrganizationController extends OCSController
     /**
      * Update an organization's subscription.
      *
-     * @param string $groupId The group ID
+     * @param int $organizationId The organization ID
      * @param string $displayName New display name
      * @param int $planId Plan ID
      * @param int $maxMembers Max members
@@ -211,7 +207,7 @@ class OrganizationController extends OCSController
     #[AuthorizedAdminSetting(settings: Users::class)]
     #[PasswordConfirmationRequired]
     public function updateSubscription(
-        string $organizationId,
+        int $organizationId,
         string $displayName,
         int $planId,
         int $maxMembers,
@@ -225,9 +221,6 @@ class OrganizationController extends OCSController
     ): DataResponse {
         $this->db->beginTransaction();
         try {
-            // Decode the parameter matching the behavior in getOrganization
-            $organizationId = urldecode($organizationId);
-
             $updatedSubscription = $this->subscriptionService->updateSubscription(
                 $organizationId,
                 $displayName,
