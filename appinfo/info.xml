@@ -20,9 +20,6 @@ This application provides organization management functionality including:
     <licence>agpl</licence>
     <author>Custom Development</author>
     <namespace>Organization</namespace>
-    <types>
-        <prevent_group_restriction/>
-    </types>
     <category>organization</category>
     <navigations>
         <navigation>

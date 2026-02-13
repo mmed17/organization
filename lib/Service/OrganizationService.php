@@ -21,6 +21,7 @@ class OrganizationService
      * @param string|null $contactLastName Last name of the contact person
      * @param string|null $contactEmail Email of the contact person
      * @param string|null $contactPhone Phone of the contact person
+     * @param string|null $adminUid User ID of the organization admin
      * @return Organization
      */
     public function createOrganization(
@@ -28,7 +29,8 @@ class OrganizationService
         ?string $contactFirstName = null,
         ?string $contactLastName = null,
         ?string $contactEmail = null,
-        ?string $contactPhone = null
+        ?string $contactPhone = null,
+        ?string $adminUid = null,
     ): Organization {
         $organization = new Organization();
         $organization->setName($name);
@@ -36,6 +38,7 @@ class OrganizationService
         $organization->setContactLastName($contactLastName);
         $organization->setContactEmail($contactEmail);
         $organization->setContactPhone($contactPhone);
+        $organization->setAdminUid($adminUid);
 
         return $this->organizationMapper->insert($organization);
     }

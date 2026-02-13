@@ -13,6 +13,12 @@ return [
         // Organizations
         ['root' => '/apps/organization', 'name' => 'Organization#getOrganizations', 'url' => '/organizations', 'verb' => 'GET'],
         ['root' => '/apps/organization', 'name' => 'Organization#getOrganization', 'url' => '/organizations/{organizationId}', 'verb' => 'GET'],
+        ['root' => '/apps/organization', 'name' => 'Organization#updateOrganization', 'url' => '/organizations/{organizationId}', 'verb' => 'PUT'],
+        ['root' => '/apps/organization', 'name' => 'Organization#getOrganizationMembers', 'url' => '/organizations/{organizationId}/members', 'verb' => 'GET'],
+        ['root' => '/apps/organization', 'name' => 'Organization#searchAvailableUsers', 'url' => '/organizations/{organizationId}/available-users', 'verb' => 'GET'],
+        ['root' => '/apps/organization', 'name' => 'Organization#addOrganizationMember', 'url' => '/organizations/{organizationId}/members', 'verb' => 'POST'],
+        ['root' => '/apps/organization', 'name' => 'Organization#removeOrganizationMember', 'url' => '/organizations/{organizationId}/members/{userId}', 'verb' => 'DELETE'],
+        ['root' => '/apps/organization', 'name' => 'Organization#createOrganizationUser', 'url' => '/organizations/{organizationId}/users', 'verb' => 'POST'],
         ['root' => '/apps/organization', 'name' => 'Organization#createOrganization', 'url' => '/organizations', 'verb' => 'POST'],
         ['root' => '/apps/organization', 'name' => 'Organization#updateSubscription', 'url' => '/organizations/{organizationId}/subscription', 'verb' => 'PUT'],
 

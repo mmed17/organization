@@ -18,8 +18,19 @@
 						</p>
 					</div>
 				</div>
-				<div :class="['status-chip', organization.subscription.status]">
-					{{ organization.subscription.status }}
+				<div class="header-actions">
+					<div :class="['status-chip', organization.subscription.status]">
+						{{ organization.subscription.status }}
+					</div>
+					<NcButton
+						v-if="canManageMembers"
+						type="tertiary"
+						@click="$emit('edit-organization')">
+						<template #icon>
+							<Pencil :size="16" />
+						</template>
+						Edit
+					</NcButton>
 				</div>
 			</div>
 
@@ -42,7 +53,7 @@
 				</div>
 
 				<!-- Card 2: Members -->
-				<div class="kpi-card">
+				<div class="kpi-card clickable" @click="$emit('manage-members')">
 					<div class="stat-header">
 						<div class="stat-icon members">
 							<AccountGroup :size="20" />
@@ -50,12 +61,12 @@
 						<span class="stat-title">Members</span>
 					</div>
 					<div class="stat-value">
-						{{ organization.usercount }} <span class="stat-total">/ {{ organization.subscription.maxMembers }}</span>
+						{{ members.length }} <span class="stat-total">/ {{ maxMembers }}</span>
 					</div>
 					<div class="progress-bar-container">
 						<div
 							class="progress-bar members"
-							:style="{ width: Math.min((organization.usercount / organization.subscription.maxMembers) * 100, 100) + '%' }">
+							:style="{ width: Math.min((members.length / maxMembers) * 100, 100) + '%' }">
 						</div>
 					</div>
 				</div>
@@ -179,6 +190,55 @@
 					</div>
 				</div>
 			</div>
+
+			<!-- Members Section Preview -->
+			<div class="members-section">
+				<div class="section-header-bar">
+					<div class="section-title">
+						<AccountGroup :size="24" />
+						<h3>Members</h3>
+						<span class="member-badge">{{ members.length }}</span>
+					</div>
+					<NcButton
+						v-if="canManageMembers"
+						type="primary"
+						@click="$emit('manage-members')">
+						<template #icon>
+							<AccountPlus :size="16" />
+						</template>
+						Manage Members
+					</NcButton>
+				</div>
+
+				<div class="members-preview">
+					<div v-if="members.length === 0" class="empty-members">
+						<AccountGroup :size="32" />
+						<p>No members yet</p>
+						<NcButton
+							v-if="canManageMembers"
+							type="secondary"
+							@click="$emit('manage-members')">
+							Add Members
+						</NcButton>
+					</div>
+					<div v-else class="members-avatars">
+						<div
+							v-for="member in displayedMembers"
+							:key="member.uid"
+							class="member-avatar-item"
+							:title="member.displayName">
+							<NcAvatar
+								:display-name="member.displayName"
+								:size="44"
+								:disable-tooltip="true" />
+							<span v-if="member.role === 'admin'" class="admin-indicator">Admin</span>
+						</div>
+						<div v-if="members.length > 5" class="more-members" @click="$emit('manage-members')">
+							<span>+{{ members.length - 5 }}</span>
+						</div>
+					</div>
+				</div>
+			</div>
 		</div>
 	</NcAppContentDetails>
 </template>
@@ -189,22 +249,35 @@ import {
 	NcAppContentDetails,
 	NcLoadingIcon,
 	NcAvatar,
+	NcButton,
 } from '@nextcloud/vue'
 
 import AccountGroup from 'vue-material-design-icons/AccountGroup.vue'
 import Briefcase from 'vue-material-design-icons/Briefcase.vue'
 import CardAccountDetails from 'vue-material-design-icons/CardAccountDetails.vue'
+import Pencil from 'vue-material-design-icons/Pencil.vue'
+import AccountPlus from 'vue-material-design-icons/AccountPlus.vue'
 
 const props = defineProps<{
 	organization: any
 	loading: boolean
+	canManageMembers: boolean
+	members: any[]
 }>()
+
+const emit = defineEmits(['edit-organization', 'manage-members', 'members-updated', 'organization-updated'])
 
 const contactFullName = computed(() => {
 	const first = props.organization.contactFirstName || ''
 	const last = props.organization.contactLastName || ''
 	const full = `${first} ${last}`.trim()
 	return full || 'Not set'
+})
+
+const maxMembers = computed(() => Number(props.organization.subscription?.maxMembers || 0))
+
+const displayedMembers = computed(() => {
+	return props.members.slice(0, 5)
 })
 
 const formatFileSize = (bytes: number) => {
@@ -267,6 +340,12 @@ const formatFileSize = (bytes: number) => {
 	font-size: 0.85em;
 }
 
+.header-actions {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
 .status-chip {
 	padding: 6px 12px;
 	border-radius: 16px;
@@ -306,6 +385,17 @@ const formatFileSize = (bytes: number) => {
 	display: flex;
 	flex-direction: column;
 	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+	transition: all 0.2s ease;
+}
+
+.kpi-card.clickable {
+	cursor: pointer;
+}
+
+.kpi-card.clickable:hover {
+	border-color: var(--color-primary);
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+	transform: translateY(-2px);
 }
 
 .stat-header {
@@ -467,6 +557,106 @@ const formatFileSize = (bytes: number) => {
 	font-style: italic;
 }
 
+/* Members Section */
+.members-section {
+	margin-top: 24px;
+	background-color: var(--color-main-background);
+	border: 1px solid var(--color-border);
+	border-radius: var(--border-radius-large);
+	overflow: hidden;
+}
+
+.section-header-bar {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 16px 20px;
+	background-color: var(--color-background-hover);
+	border-bottom: 1px solid var(--color-border);
+}
+
+.section-title {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.section-title h3 {
+	margin: 0;
+	font-size: 1.1rem;
+	font-weight: 600;
+}
+
+.member-badge {
+	padding: 2px 10px;
+	background-color: var(--color-primary);
+	color: white;
+	font-size: 0.85rem;
+	font-weight: 600;
+	border-radius: 999px;
+}
+
+.members-preview {
+	padding: 20px;
+}
+
+.empty-members {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 12px;
+	padding: 40px;
+	color: var(--color-text-maxcontrast);
+}
+
+.empty-members p {
+	margin: 0;
+	font-size: 1rem;
+}
+
+.members-avatars {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.member-avatar-item {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 4px;
+}
+
+.admin-indicator {
+	font-size: 0.65rem;
+	padding: 2px 6px;
+	background-color: var(--color-success-light);
+	color: var(--color-success);
+	border-radius: 4px;
+	font-weight: 600;
+	text-transform: uppercase;
+}
+
+.more-members {
+	width: 44px;
+	height: 44px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background-color: var(--color-background-dark);
+	border-radius: 50%;
+	font-weight: 600;
+	color: var(--color-text-maxcontrast);
+	cursor: pointer;
+	transition: all 0.2s ease;
+}
+
+.more-members:hover {
+	background-color: var(--color-primary);
+	color: white;
+}
+
 @media (max-width: 768px) {
 	.kpi-grid,
 	.info-grid {
@@ -477,6 +667,15 @@ const formatFileSize = (bytes: number) => {
 		flex-direction: column;
 		gap: 16px;
 		align-items: flex-start;
+	}
+
+	.header-actions {
+		width: 100%;
+		justify-content: space-between;
+	}
+
+	.members-avatars {
+		flex-wrap: wrap;
 	}
 }
 </style>

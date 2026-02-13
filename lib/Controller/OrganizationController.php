@@ -4,21 +4,24 @@ declare(strict_types=1);
 namespace OCA\Organization\Controller;
 
 use OCP\AppFramework\Http\DataResponse;
+use OCP\AppFramework\OCS\OCSForbiddenException;
 use OCP\AppFramework\OCS\OCSNotFoundException;
 use OCP\AppFramework\OCSController;
+use OCP\IGroupManager;
 use OCP\IRequest;
+use OCP\IUserManager;
 use OCP\IUserSession;
 use OCP\IDBConnection;
 use OCA\Organization\Db\OrganizationMapper;
 use OCA\Organization\Db\SubscriptionMapper;
 use OCA\Organization\Db\PlanMapper;
+use OCA\Organization\Db\UserMapper;
 use OCA\Organization\Service\OrganizationService;
+use OCA\Organization\Service\OrganizationAdminService;
 use OCA\Organization\Service\SubscriptionService;
 use Psr\Log\LoggerInterface;
-use OCP\AppFramework\Http\Attribute\AuthorizedAdminSetting;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\Attribute\PasswordConfirmationRequired;
-use OCA\Settings\Settings\Admin\Users;
 use Exception;
 use OCP\AppFramework\OCS\OCSException;
 
@@ -31,8 +34,12 @@ class OrganizationController extends OCSController
         private OrganizationMapper $organizationMapper,
         private SubscriptionMapper $subscriptionMapper,
         private PlanMapper $planMapper,
+        private UserMapper $userMapper,
         private OrganizationService $organizationService,
+        private OrganizationAdminService $organizationAdminService,
         private SubscriptionService $subscriptionService,
+        private IUserManager $userManager,
+        private IGroupManager $groupManager,
         private IUserSession $userSession,
         private IDBConnection $db,
         private LoggerInterface $logger
@@ -48,24 +55,25 @@ class OrganizationController extends OCSController
      * @param int $offset Offset for pagination
      * @return DataResponse
      */
-    #[AuthorizedAdminSetting(settings: Users::class)]
+    #[NoAdminRequired]
     public function getOrganizations(string $search = '', ?int $limit = null, int $offset = 0): DataResponse
     {
+        $organizationId = $this->resolveOrganizationForCurrentUser(true);
+
         // Query organizations directly (organization-centric, no N+1 queries)
-        $orgRows = $this->organizationMapper->findAll($search, $limit, $offset);
+        $orgRows = $this->organizationMapper->findAll($search, $limit, $offset, $organizationId);
 
         $organizations = [];
         foreach ($orgRows as $row) {
-            $userCount = $this->organizationMapper->getUserCountById((int) $row['id']);
-
             $organizations[] = [
                 'id' => (int) $row['id'],
                 'displayname' => $row['name'],
-                'usercount' => $userCount,
+                'usercount' => (int) ($row['user_count'] ?? 0),
                 'disabled' => 0,
                 'canAdd' => true,
                 'canRemove' => true,
                 'isOrganization' => true,
+                'adminUid' => $row['admin_uid'] ?? null,
                 'subscription' => [
                     'id' => $row['subscription_id'],
                     'status' => $row['subscription_status'],
@@ -92,6 +100,8 @@ class OrganizationController extends OCSController
     #[NoAdminRequired]
     public function getOrganization(int $organizationId): DataResponse
     {
+        $this->assertCanManageOrganization($organizationId, true);
+
         $organization = $this->organizationMapper->find($organizationId);
         if ($organization === null) {
             throw new OCSNotFoundException('Organization does not exist');
@@ -111,6 +121,247 @@ class OrganizationController extends OCSController
             'organization' => $organization,
             'subscription' => $subscription,
             'plan' => $plan,
+            'members' => $this->buildMembersPayload($organization->getId()),
+        ]);
+    }
+
+    /**
+     * Update editable organization metadata.
+     */
+    #[NoAdminRequired]
+    public function updateOrganization(
+        int $organizationId,
+        string $displayname,
+        ?string $contactFirstName = null,
+        ?string $contactLastName = null,
+        ?string $contactEmail = null,
+        ?string $contactPhone = null
+    ): DataResponse {
+        $this->assertCanManageOrganization($organizationId, true);
+
+        $organization = $this->organizationMapper->find($organizationId);
+        if ($organization === null) {
+            throw new OCSNotFoundException('Organization does not exist');
+        }
+
+        $organization->setName($displayname);
+        $organization->setContactFirstName($contactFirstName);
+        $organization->setContactLastName($contactLastName);
+        $organization->setContactEmail($contactEmail);
+        $organization->setContactPhone($contactPhone);
+
+        $updated = $this->organizationMapper->update($organization);
+
+        return new DataResponse(['organization' => $updated]);
+    }
+
+    /**
+     * Return organization members for management UI.
+     */
+    #[NoAdminRequired]
+    public function getOrganizationMembers(int $organizationId): DataResponse
+    {
+        $this->assertCanManageOrganization($organizationId, true);
+
+        return new DataResponse([
+            'members' => $this->buildMembersPayload($organizationId),
+        ]);
+    }
+
+    /**
+     * Search for users available to add to this organization.
+     *
+     * @param int $organizationId ID of the organization
+     * @param string $search Search query for user display name, user id or email
+     * @return DataResponse
+     */
+    #[NoAdminRequired]
+    public function searchAvailableUsers(int $organizationId, string $search = ''): DataResponse
+    {
+        $this->assertCanManageOrganization($organizationId, true);
+
+        $search = trim($search);
+        if ($search === '') {
+            return new DataResponse(['users' => []]);
+        }
+
+        $searchLower = strtolower($search);
+        $availableUsers = [];
+
+        // Get users already in this organization to exclude them
+        $existingMembers = $this->userMapper->getOrganizationMembers($organizationId);
+        $existingUids = array_column($existingMembers, 'user_uid');
+
+        // Search all users in the system
+        $limit = 20;
+        $offset = 0;
+
+        do {
+            $users = $this->userManager->searchDisplayName($search, $limit, $offset);
+            foreach ($users as $user) {
+                $uid = $user->getUID();
+
+                // Skip if already in this organization
+                if (in_array($uid, $existingUids, true)) {
+                    continue;
+                }
+
+                // Check if user already belongs to another organization
+                $membership = $this->userMapper->getOrganizationMembership($uid);
+                if ($membership !== null) {
+                    continue;
+                }
+
+                $displayName = $user->getDisplayName();
+                $email = $user->getEMailAddress();
+
+                // Additional matching for user ID and email
+                $matchesSearch = (
+                    stripos($uid, $searchLower) !== false ||
+                    stripos(strtolower($displayName), $searchLower) !== false ||
+                    ($email !== null && stripos(strtolower($email), $searchLower) !== false)
+                );
+
+                if ($matchesSearch) {
+                    $availableUsers[] = [
+                        'uid' => $uid,
+                        'displayName' => $displayName,
+                        'email' => $email,
+                    ];
+                }
+            }
+            $offset += $limit;
+        } while (count($users) === $limit && count($availableUsers) < 10);
+
+        // Limit results
+        $availableUsers = array_slice($availableUsers, 0, 10);
+
+        return new DataResponse(['users' => $availableUsers]);
+    }
+
+    #[NoAdminRequired]
+    public function addOrganizationMember(int $organizationId, string $userId): DataResponse
+    {
+        $this->assertCanManageOrganization($organizationId, true);
+
+        $userId = trim($userId);
+        if ($userId === '') {
+            throw new OCSException('User ID is required', 104);
+        }
+
+        $user = $this->userManager->get($userId);
+        if ($user === null) {
+            throw new OCSNotFoundException('User does not exist');
+        }
+
+        $existingMembership = $this->userMapper->getOrganizationMembership($userId);
+        if ($existingMembership !== null && $existingMembership['organization_id'] !== $organizationId) {
+            throw new OCSException('User already belongs to another organization', 104);
+        }
+
+        if ($existingMembership !== null && $existingMembership['organization_id'] === $organizationId) {
+            return new DataResponse([
+                'members' => $this->buildMembersPayload($organizationId),
+            ]);
+        }
+
+        $this->assertMemberCapacityAvailable($organizationId);
+
+        $this->userMapper->addOrganizationToUser($userId, $organizationId, 'member');
+
+        return new DataResponse([
+            'members' => $this->buildMembersPayload($organizationId),
+        ]);
+    }
+
+    #[NoAdminRequired]
+    public function createOrganizationUser(
+        int $organizationId,
+        string $userId,
+        string $password,
+        ?string $displayName = null,
+        ?string $email = null
+    ): DataResponse {
+        $this->assertCanManageOrganization($organizationId, true);
+
+        $userId = trim($userId);
+        if ($userId === '' || trim($password) === '') {
+            throw new OCSException('User ID and password are required', 104);
+        }
+
+        $existingMembership = $this->userMapper->getOrganizationMembership($userId);
+        if ($existingMembership !== null && $existingMembership['organization_id'] !== $organizationId) {
+            throw new OCSException('User already belongs to another organization', 104);
+        }
+
+        if ($this->userManager->userExists($userId)) {
+            throw new OCSException('User ID already exists', 104);
+        }
+
+        try {
+            $this->userManager->validateUserId($userId);
+        } catch (\InvalidArgumentException $e) {
+            throw new OCSException('Invalid user ID: ' . $e->getMessage(), 104);
+        }
+        $this->assertMemberCapacityAvailable($organizationId);
+
+        $user = $this->userManager->createUser($userId, $password);
+        if ($user === false) {
+            throw new OCSException('Failed to create user account', 104);
+        }
+
+        try {
+            if ($displayName !== null && trim($displayName) !== '') {
+                $user->setDisplayName(trim($displayName));
+            }
+            if ($email !== null && trim($email) !== '') {
+                $user->setEMailAddress(trim($email));
+            }
+
+            $this->userMapper->addOrganizationToUser($userId, $organizationId, 'member');
+        } catch (\Throwable $e) {
+            $user->delete();
+            throw new OCSException('Failed to assign user to organization: ' . $e->getMessage(), 104);
+        }
+
+        return new DataResponse([
+            'members' => $this->buildMembersPayload($organizationId),
+            'createdUser' => [
+                'uid' => $userId,
+                'displayName' => $user->getDisplayName(),
+                'email' => $user->getEMailAddress(),
+            ],
+        ]);
+    }
+
+    #[NoAdminRequired]
+    public function removeOrganizationMember(int $organizationId, string $userId): DataResponse
+    {
+        $this->assertCanManageOrganization($organizationId, true);
+
+        $organization = $this->organizationMapper->find($organizationId);
+        if ($organization === null) {
+            throw new OCSNotFoundException('Organization does not exist');
+        }
+
+        if ($organization->getAdminUid() === $userId) {
+            throw new OCSException('Cannot remove organization admin from members', 104);
+        }
+
+        $currentUser = $this->userSession->getUser();
+        if ($currentUser !== null && $currentUser->getUID() === $userId) {
+            throw new OCSException('You cannot remove yourself from the organization', 104);
+        }
+
+        $existingMembership = $this->userMapper->getOrganizationMembership($userId);
+        if ($existingMembership === null || $existingMembership['organization_id'] !== $organizationId) {
+            throw new OCSNotFoundException('Organization member not found');
+        }
+
+        $this->userMapper->removeUserFromOrganization($userId);
+
+        return new DataResponse([
+            'members' => $this->buildMembersPayload($organizationId),
         ]);
     }
 
@@ -130,10 +381,13 @@ class OrganizationController extends OCSController
      * @param string|null $contactLastName Last name of contact person
      * @param string|null $contactEmail Email of contact person
      * @param string|null $contactPhone Phone of contact person
+     * @param string|null $adminUserId Organization admin user ID
+     * @param string|null $adminPassword Organization admin password
+     * @param string|null $adminDisplayName Organization admin display name
+     * @param string|null $adminEmail Organization admin email
      * @return DataResponse
      * @throws OCSException
      */
-    #[AuthorizedAdminSetting(settings: Users::class)]
     #[PasswordConfirmationRequired]
     public function createOrganization(
         string $validity,
@@ -148,18 +402,28 @@ class OrganizationController extends OCSController
         ?string $contactFirstName = null,
         ?string $contactLastName = null,
         ?string $contactEmail = null,
-        ?string $contactPhone = null
+        ?string $contactPhone = null,
+        ?string $adminUserId = null,
+        ?string $adminPassword = null,
+        ?string $adminDisplayName = null,
+        ?string $adminEmail = null
     ): DataResponse {
+        $adminCreated = false;
 
         try {
             $this->db->beginTransaction();
 
+            if ($adminUserId === null || trim($adminUserId) === '' || $adminPassword === null || trim($adminPassword) === '') {
+                throw new OCSException('Organization admin user ID and password are required', 104);
+            }
+
             $organization = $this->organizationService->createOrganization(
-                $displayname,
+                $displayname ?? '',
                 $contactFirstName,
                 $contactLastName,
                 $contactEmail,
-                $contactPhone
+                $contactPhone,
+                trim($adminUserId)
             );
 
             if ($organization === null) {
@@ -178,9 +442,24 @@ class OrganizationController extends OCSController
                 $currency
             );
 
+            $this->organizationAdminService->createOrganizationAdmin(
+                $organization->getId(),
+                trim($adminUserId),
+                $adminPassword,
+                $adminDisplayName,
+                $adminEmail ?? $contactEmail
+            );
+            $adminCreated = true;
+
             $this->db->commit();
         } catch (\Exception $e) {
             $this->db->rollBack();
+            if ($adminCreated && $adminUserId !== null) {
+                $createdUser = $this->userManager->get(trim($adminUserId));
+                if ($createdUser !== null) {
+                    $createdUser->delete();
+                }
+            }
             throw new OCSException('Failed to create organization: ' . $e->getMessage(), 104);
         }
 
@@ -204,7 +483,6 @@ class OrganizationController extends OCSController
      * @return DataResponse
      * @throws OCSException
      */
-    #[AuthorizedAdminSetting(settings: Users::class)]
     #[PasswordConfirmationRequired]
     public function updateSubscription(
         int $organizationId,
@@ -247,5 +525,79 @@ class OrganizationController extends OCSController
             }
             throw new OCSException('Failed to update organization: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Returns null for global admins, otherwise the organization id of current org admin user.
+     */
+    private function resolveOrganizationForCurrentUser(bool $mustBeOrgAdmin = true): ?int
+    {
+        $user = $this->userSession->getUser();
+        if ($user === null) {
+            throw new OCSForbiddenException('Authentication required');
+        }
+
+        $userId = $user->getUID();
+        if ($this->groupManager->isAdmin($userId)) {
+            return null;
+        }
+
+        $membership = $this->userMapper->getOrganizationMembership($userId);
+        if ($membership === null) {
+            throw new OCSForbiddenException('You are not assigned to an organization');
+        }
+
+        if ($mustBeOrgAdmin && $membership['role'] !== 'admin') {
+            throw new OCSForbiddenException('Only organization admins can access this resource');
+        }
+
+        return (int) $membership['organization_id'];
+    }
+
+    private function assertCanManageOrganization(int $organizationId, bool $mustBeOrgAdmin): void
+    {
+        $allowedOrganizationId = $this->resolveOrganizationForCurrentUser($mustBeOrgAdmin);
+        if ($allowedOrganizationId !== null && $allowedOrganizationId !== $organizationId) {
+            throw new OCSNotFoundException('Organization does not exist');
+        }
+    }
+
+    private function assertMemberCapacityAvailable(int $organizationId): void
+    {
+        $subscription = $this->subscriptionMapper->findByOrganizationId($organizationId);
+        if ($subscription === null) {
+            throw new OCSNotFoundException('No subscription found for this organization');
+        }
+
+        $plan = $this->planMapper->find($subscription->getPlanId());
+        if ($plan === null) {
+            throw new OCSNotFoundException('No plan found for this organization');
+        }
+
+        $maxMembers = (int) $plan->getMaxMembers();
+        $currentMembers = $this->userMapper->countUsersInOrganization($organizationId);
+
+        if ($currentMembers >= $maxMembers) {
+            throw new OCSForbiddenException('Organization member limit reached for current subscription plan');
+        }
+    }
+
+    /**
+     * @return array<int,array{uid:string,displayName:string,email:?string,role:string}>
+     */
+    private function buildMembersPayload(int $organizationId): array
+    {
+        $members = [];
+        foreach ($this->userMapper->getOrganizationMembers($organizationId) as $member) {
+            $user = $this->userManager->get($member['user_uid']);
+            $members[] = [
+                'uid' => $member['user_uid'],
+                'displayName' => $user?->getDisplayName() ?? $member['user_uid'],
+                'email' => $user?->getEMailAddress(),
+                'role' => $member['role'],
+            ];
+        }
+
+        return $members;
     }
 }

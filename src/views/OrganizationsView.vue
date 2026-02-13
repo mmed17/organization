@@ -7,6 +7,7 @@
 				:organizations="organizations"
 				:selected-id="selectedOrganization?.id"
 				:loading="loading"
+				:can-create="permissions.isGlobalAdmin"
 				@select="selectOrganization"
 				@create="openCreateModal" />
 		</template>
@@ -15,7 +16,13 @@
 			<OrgDetails
 				v-if="selectedOrganization"
 				:organization="selectedOrganization"
-				:loading="loadingDetails" />
+				:loading="loadingDetails"
+				:can-manage-members="permissions.isGlobalAdmin || permissions.isOrganizationAdmin"
+				:members="selectedOrganization.members || []"
+				@edit-organization="showEditModal = true"
+				@manage-members="showMembersModal = true"
+				@members-updated="onMembersUpdated"
+				@organization-updated="onOrganizationUpdated" />
 
 			<div v-else class="empty-content">
 				<div class="icon-bg">
@@ -32,6 +39,20 @@
 		:plans="plans"
 		@close="showCreateModal = false"
 		@success="onOrgCreated" />
+
+	<EditOrganizationModal
+		:show="showEditModal"
+		:organization="selectedOrganization"
+		@close="showEditModal = false"
+		@saved="onOrganizationUpdated" />
+
+	<ManageMembersModal
+		:show="showMembersModal"
+		:organization="selectedOrganization"
+		:members="selectedOrganization?.members || []"
+		:can-manage-members="permissions.isGlobalAdmin || permissions.isOrganizationAdmin"
+		@close="showMembersModal = false"
+		@members-updated="onMembersUpdated" />
 </template>
 
 <script setup lang="ts">
@@ -45,19 +66,34 @@ import AccountGroup from 'vue-material-design-icons/AccountGroup.vue'
 import OrgList from '../components/Organizations/OrgList.vue'
 import OrgDetails from '../components/Organizations/OrgDetails.vue'
 import CreateOrgModal from '../components/Organizations/CreateOrgModal.vue'
+import EditOrganizationModal from '../components/Organizations/EditOrganizationModal.vue'
+import ManageMembersModal from '../components/Organizations/ManageMembersModal.vue'
 
 const organizations = ref([])
 const plans = ref([])
 const loading = ref(true)
 const showCreateModal = ref(false)
+const showEditModal = ref(false)
+const showMembersModal = ref(false)
 const selectedOrganization = ref(null)
 const loadingDetails = ref(false)
+
+const props = defineProps<{
+	permissions: {
+		isGlobalAdmin: boolean
+		isOrganizationAdmin: boolean
+		organizationId: number | null
+	}
+}>()
 
 const fetchOrganizations = async () => {
 	loading.value = true
 	try {
 		const response = await axios.get(generateOcsUrl('apps/organization/organizations'))
 		organizations.value = response.data.ocs.data.organizations
+		if (!props.permissions.isGlobalAdmin && organizations.value.length === 1) {
+			selectOrganization(organizations.value[0])
+		}
 	} catch (error) {
 		console.error('Failed to fetch organizations', error)
 	} finally {
@@ -66,6 +102,11 @@ const fetchOrganizations = async () => {
 }
 
 const fetchPlans = async () => {
+	if (!props.permissions.isGlobalAdmin) {
+		plans.value = []
+		return
+	}
+
 	try {
 		const response = await axios.get(generateOcsUrl('apps/organization/plans'))
 		plans.value = response.data.ocs.data.plans
@@ -74,12 +115,10 @@ const fetchPlans = async () => {
 	}
 }
 
-const refresh = () => {
-	fetchOrganizations()
-	fetchPlans()
-}
-
 const openCreateModal = () => {
+	if (!props.permissions.isGlobalAdmin) {
+		return
+	}
 	showCreateModal.value = true
 }
 
@@ -110,6 +149,7 @@ const selectOrganization = async (org: any) => {
 				...data.subscription,
 			},
 			plan: data.plan,
+			members: data.members || [],
 		}
 	} catch (error) {
 		console.error('Failed to fetch organization details', error)
@@ -118,9 +158,46 @@ const selectOrganization = async (org: any) => {
 	}
 }
 
+const onMembersUpdated = (members: any[]) => {
+	if (!selectedOrganization.value) {
+		return
+	}
+
+	selectedOrganization.value = {
+		...selectedOrganization.value,
+		members,
+		usercount: members.length,
+	}
+
+	organizations.value = organizations.value.map((org: any) => org.id === selectedOrganization.value.id
+		? { ...org, usercount: members.length }
+		: org)
+}
+
+const onOrganizationUpdated = (updatedOrg: any) => {
+	if (!selectedOrganization.value) {
+		return
+	}
+
+	selectedOrganization.value = {
+		...selectedOrganization.value,
+		...updatedOrg,
+		displayname: updatedOrg.name || updatedOrg.displayname || selectedOrganization.value.displayname,
+	}
+
+	organizations.value = organizations.value.map((org: any) => org.id === selectedOrganization.value.id
+		? {
+			...org,
+			displayname: selectedOrganization.value.displayname,
+		}
+		: org)
+}
+
 onMounted(() => {
 	fetchOrganizations()
-	fetchPlans()
+	if (props.permissions.isGlobalAdmin) {
+		fetchPlans()
+	}
 })
 </script>
 

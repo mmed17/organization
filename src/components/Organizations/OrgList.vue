@@ -10,7 +10,7 @@
 					<Magnify :size="20" />
 				</template>
 			</NcTextField>
-		<NcButton type="primary" @click="$emit('create')">
+		<NcButton v-if="canCreate" type="primary" @click="$emit('create')">
 			<template #icon><Plus :size="20" /></template>
 			New
 		</NcButton>
@@ -26,8 +26,8 @@
 				<AccountGroup :size="48" />
 			</div>
 			<h3>No organizations found</h3>
-			<p>Get started by creating a new organization.</p>
-			<NcButton type="primary" @click="$emit('create')">
+			<p>{{ canCreate ? 'Get started by creating a new organization.' : 'No organizations available for your account.' }}</p>
+			<NcButton v-if="canCreate" type="primary" @click="$emit('create')">
 				<template #icon>
 					<Plus :size="20" />
 				</template>
@@ -96,6 +96,7 @@ const props = defineProps<{
 	organizations: any[]
 	selectedId: number | null
 	loading: boolean
+	canCreate: boolean
 }>()
 
 const emit = defineEmits(['select', 'create'])

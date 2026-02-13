@@ -38,7 +38,7 @@ class OrganizationMapper extends QBMapper
     }
 
     /**
-     * Finds an organization by one of its user's ID.
+     * Finds an organization by one of its member user IDs.
      *
      * @param string $userId The user's ID.
      * @return Organization|null
@@ -51,12 +51,12 @@ class OrganizationMapper extends QBMapper
             ->from($this->getTableName(), 'o')
             ->innerJoin(
                 'o',
-                'users',
-                'u',
-                $qb->expr()->eq('o.id', 'u.organization_id')
+                'organization_members',
+                'om',
+                $qb->expr()->eq('o.id', 'om.organization_id')
             )
             ->where(
-                $qb->expr()->eq('u.uid', $qb->createNamedParameter($userId))
+                $qb->expr()->eq('om.user_uid', $qb->createNamedParameter($userId))
             );
 
         try {
@@ -77,12 +77,12 @@ class OrganizationMapper extends QBMapper
         $qb = $this->db->getQueryBuilder();
 
         $qb->selectAlias(
-            $qb->createFunction('COUNT(u.uid)'),
+            $qb->createFunction('COUNT(om.user_uid)'),
             'user_count'
         )
-            ->from('users', 'u')
+            ->from('organization_members', 'om')
             ->where(
-                $qb->expr()->eq('u.organization_id', $qb->createNamedParameter($organizationId, \PDO::PARAM_INT))
+                $qb->expr()->eq('om.organization_id', $qb->createNamedParameter($organizationId, \PDO::PARAM_INT))
             );
 
         $result = $qb->executeQuery();
@@ -129,13 +129,14 @@ class OrganizationMapper extends QBMapper
      * @param int $offset Pagination offset
      * @return array Array of organization data with subscription info
      */
-    public function findAll(string $search = '', ?int $limit = null, int $offset = 0): array
+    public function findAll(string $search = '', ?int $limit = null, int $offset = 0, ?int $organizationId = null): array
     {
         $qb = $this->db->getQueryBuilder();
 
         $qb->select(
             'o.id',
             'o.name',
+            'o.admin_uid',
             's.id as subscription_id',
             's.status as subscription_status',
             's.started_at',
@@ -147,13 +148,37 @@ class OrganizationMapper extends QBMapper
         )
             ->from('organizations', 'o')
             ->leftJoin('o', 'subscriptions', 's', $qb->expr()->eq('o.id', 's.organization_id'))
-            ->leftJoin('s', 'plans', 'p', $qb->expr()->eq('s.plan_id', 'p.id'));
+            ->leftJoin('s', 'plans', 'p', $qb->expr()->eq('s.plan_id', 'p.id'))
+            ->leftJoin('o', 'organization_members', 'om', $qb->expr()->eq('o.id', 'om.organization_id'));
+
+        $qb->selectAlias(
+            $qb->createFunction('COUNT(om.user_uid)'),
+            'user_count'
+        );
 
         if (!empty($search)) {
-            $qb->where(
+            $qb->andWhere(
                 $qb->expr()->iLike('o.name', $qb->createNamedParameter('%' . $search . '%'))
             );
         }
+
+        if ($organizationId !== null) {
+            $qb->andWhere(
+                $qb->expr()->eq('o.id', $qb->createNamedParameter($organizationId, \PDO::PARAM_INT))
+            );
+        }
+
+        $qb->groupBy('o.id')
+            ->addGroupBy('o.name')
+            ->addGroupBy('o.admin_uid')
+            ->addGroupBy('s.id')
+            ->addGroupBy('s.status')
+            ->addGroupBy('s.started_at')
+            ->addGroupBy('s.ended_at')
+            ->addGroupBy('s.plan_id')
+            ->addGroupBy('p.name')
+            ->addGroupBy('p.max_members')
+            ->addGroupBy('p.max_projects');
 
         $qb->orderBy('o.name', 'ASC');
 
@@ -173,14 +198,14 @@ class OrganizationMapper extends QBMapper
     }
 
     /**
-     * Get user count for an organization using the organization_id on users table.
+     * Get member count for an organization from organization_members table.
      */
     public function getUserCountById(int $organizationId): int
     {
         $qb = $this->db->getQueryBuilder();
         $qb->select($qb->createFunction('COUNT(*)'))
-            ->from('users')
-            ->where($qb->expr()->eq('organization_id', $qb->createNamedParameter($organizationId)));
+            ->from('organization_members')
+            ->where($qb->expr()->eq('organization_id', $qb->createNamedParameter($organizationId, \PDO::PARAM_INT)));
 
         $result = $qb->executeQuery();
         $count = (int) $result->fetchOne();

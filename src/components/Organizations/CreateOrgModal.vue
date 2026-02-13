@@ -57,6 +57,36 @@
 							</NcTextField>
 						</div>
 					</div>
+
+					<!-- Organization Admin -->
+					<div class="form-section">
+						<div class="section-header">
+							<AccountGroup :size="20" class="section-icon" />
+							<h3>Organization Admin</h3>
+						</div>
+						<div class="section-body grid-2-tight">
+							<NcTextField
+								v-model="newOrg.adminUserId"
+								label="Admin User ID"
+								:error="!!errors.adminUserId"
+								:helper-text="errors.adminUserId"
+								required />
+							<NcTextField
+								v-model="newOrg.adminDisplayName"
+								label="Admin Display Name" />
+							<NcTextField
+								v-model="newOrg.adminEmail"
+								label="Admin Email"
+								type="email" />
+							<NcTextField
+								v-model="newOrg.adminPassword"
+								label="Admin Password"
+								type="password"
+								:error="!!errors.adminPassword"
+								:helper-text="errors.adminPassword"
+								required />
+						</div>
+					</div>
 				</div>
 
 				<!-- Right Column: Plan & Limits -->
@@ -160,6 +190,8 @@ const submitting = ref(false)
 
 const errors = reactive({
 	displayname: '',
+	adminUserId: '',
+	adminPassword: '',
 })
 
 const defaultNewOrg = {
@@ -168,6 +200,10 @@ const defaultNewOrg = {
 	contactLastName: '',
 	contactEmail: '',
 	contactPhone: '',
+	adminUserId: '',
+	adminPassword: '',
+	adminDisplayName: '',
+	adminEmail: '',
 	validity: '1 year',
 	planId: null,
 	memberLimit: 10,
@@ -199,6 +235,8 @@ watch(() => props.show, (val) => {
 	if (val) {
 		Object.assign(newOrg, defaultNewOrg)
 		errors.displayname = ''
+		errors.adminUserId = ''
+		errors.adminPassword = ''
 	}
 })
 
@@ -217,8 +255,10 @@ const onPlanChange = () => {
 
 const handleCreate = async () => {
 	errors.displayname = !newOrg.displayname ? 'Name is required' : ''
+	errors.adminUserId = !newOrg.adminUserId ? 'Admin user ID is required' : ''
+	errors.adminPassword = !newOrg.adminPassword ? 'Admin password is required' : ''
 	
-	if (errors.displayname) return
+	if (errors.displayname || errors.adminUserId || errors.adminPassword) return
 
 	submitting.value = true
 	try {

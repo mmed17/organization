@@ -4,7 +4,6 @@ declare(strict_types=1);
 namespace OCA\Organization\Controller;
 
 use Exception;
-use OCP\AppFramework\Http\Attribute\AuthorizedAdminSetting;
 use OCP\AppFramework\Http\Attribute\PasswordConfirmationRequired;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\OCS\OCSException;
@@ -13,7 +12,6 @@ use OCP\AppFramework\OCSController;
 use OCP\IRequest;
 use OCA\Organization\Db\PlanMapper;
 use OCA\Organization\Service\PlanService;
-use OCA\Settings\Settings\Admin\Users;
 use Psr\Log\LoggerInterface;
 
 class PlanController extends OCSController
@@ -37,7 +35,6 @@ class PlanController extends OCSController
      * @param int $offset
      * @return DataResponse
      */
-    #[AuthorizedAdminSetting(settings: Users::class)]
     public function getPlans(string $search = '', ?int $limit = null, int $offset = 0): DataResponse
     {
         $plans = $this->planService->getAllPlans($search, $limit, $offset);
@@ -51,7 +48,6 @@ class PlanController extends OCSController
      * @return DataResponse
      * @throws OCSNotFoundException
      */
-    #[AuthorizedAdminSetting(settings: Users::class)]
     public function getPlan(int $planId): DataResponse
     {
         $plan = $this->planService->getPlan($planId);
@@ -77,7 +73,6 @@ class PlanController extends OCSController
      * @return DataResponse
      * @throws OCSException
      */
-    #[AuthorizedAdminSetting(settings: Users::class)]
     #[PasswordConfirmationRequired]
     public function createPlan(
         string $name,
@@ -122,7 +117,6 @@ class PlanController extends OCSController
      * @return DataResponse
      * @throws OCSException
      */
-    #[AuthorizedAdminSetting(settings: Users::class)]
     #[PasswordConfirmationRequired]
     public function updatePlan(
         int $planId,
@@ -164,7 +158,6 @@ class PlanController extends OCSController
      * @return DataResponse
      * @throws OCSException
      */
-    #[AuthorizedAdminSetting(settings: Users::class)]
     #[PasswordConfirmationRequired]
     public function deletePlan(int $planId): DataResponse
     {
