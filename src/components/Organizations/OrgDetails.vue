@@ -90,32 +90,7 @@
 
 			<!-- Info Section -->
 			<div class="info-grid">
-				<!-- Block 1: Subscription Details -->
-				<div class="info-block">
-					<div class="card-header">
-						<h3>Subscription Details</h3>
-					</div>
-					<div class="info-rows">
-						<div class="info-row">
-							<span class="label">Subscription ID</span>
-							<span class="value monospace">{{ organization.subscription.id }}</span>
-						</div>
-						<div class="info-row">
-							<span class="label">Status</span>
-							<span class="value capitalize">{{ organization.subscription.status }}</span>
-						</div>
-						<div class="info-row">
-							<span class="label">Start Date</span>
-							<span class="value">{{ organization.subscription.startedAt }}</span>
-						</div>
-						<div class="info-row">
-							<span class="label">End Date</span>
-							<span class="value">{{ organization.subscription.endedAt || 'No end date' }}</span>
-						</div>
-					</div>
-				</div>
-
-				<!-- Block 2: Contact Person -->
+				<!-- Block 1: Contact Person -->
 				<div class="info-block">
 					<div class="card-header">
 						<h3>Contact Person</h3>
@@ -142,6 +117,31 @@
 								</a>
 								<span v-else class="text-muted">Not set</span>
 							</span>
+						</div>
+					</div>
+				</div>
+
+				<!-- Block 2: Subscription Details -->
+				<div class="info-block">
+					<div class="card-header">
+						<h3>Subscription Details</h3>
+					</div>
+					<div class="info-rows">
+						<div class="info-row">
+							<span class="label">Subscription ID</span>
+							<span class="value monospace">{{ organization.subscription.id }}</span>
+						</div>
+						<div class="info-row">
+							<span class="label">Status</span>
+							<span class="value capitalize">{{ organization.subscription.status }}</span>
+						</div>
+						<div class="info-row">
+							<span class="label">Start Date</span>
+							<span class="value">{{ organization.subscription.startedAt }}</span>
+						</div>
+						<div class="info-row">
+							<span class="label">End Date</span>
+							<span class="value">{{ organization.subscription.endedAt || 'No end date' }}</span>
 						</div>
 					</div>
 				</div>
