@@ -1,17 +1,19 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OCA\Organization\Service;
 
-use DateTime;
-use DateTimeZone;
+use OCP\AppFramework\OCS\OCSNotFoundException;
+
 use OCA\Organization\Db\OrganizationMapper;
-use OCA\Organization\Db\Plan;
 use OCA\Organization\Db\Subscription;
 use OCA\Organization\Db\SubscriptionMapper;
 use OCA\Organization\Db\PlanMapper;
 use OCA\Organization\Db\SubscriptionHistoryMapper;
-use OCP\AppFramework\OCS\OCSNotFoundException;
+
+use DateTime;
+use DateTimeZone;
 
 class SubscriptionService
 {
@@ -20,19 +22,22 @@ class SubscriptionService
     private OrganizationMapper $organizationMapper;
     private PlanService $planService;
     private SubscriptionHistoryMapper $subscriptionHistoryMapper;
+    private NotificationService $notificationService;
 
     public function __construct(
         SubscriptionMapper $subscriptionMapper,
         PlanMapper $planMapper,
         OrganizationMapper $organizationMapper,
         PlanService $planService,
-        SubscriptionHistoryMapper $subscriptionHistoryMapper
+        SubscriptionHistoryMapper $subscriptionHistoryMapper,
+        NotificationService $notificationService,
     ) {
         $this->subscriptionMapper = $subscriptionMapper;
         $this->planMapper = $planMapper;
         $this->organizationMapper = $organizationMapper;
         $this->planService = $planService;
         $this->subscriptionHistoryMapper = $subscriptionHistoryMapper;
+        $this->notificationService = $notificationService;
     }
 
     /**
@@ -97,7 +102,7 @@ class SubscriptionService
         ?float $price,
         ?string $currency,
         string $changedByUserId
-    ) {
+    ): Subscription {
         // 1. Find the organization and subscription
         $organization = $this->organizationMapper->find($organizationId);
         if ($organization === null) {
@@ -136,8 +141,9 @@ class SubscriptionService
         $now = new DateTime();
         $originalStatus = $previousSubscription->getStatus();
         $newStatus = $status;
+        $statusChangeRequested = $originalStatus !== $newStatus;
 
-        if ($originalStatus !== $newStatus) {
+        if ($statusChangeRequested) {
             switch ($newStatus) {
                 case 'paused':
                     $subscription->setStatus('paused');
@@ -159,13 +165,17 @@ class SubscriptionService
             }
         }
 
+        $statusChanged = $statusChangeRequested && $originalStatus !== $subscription->getStatus();
+
         // 5. Handle duration extension
+        $extended = false;
         if ($extendDuration !== null) {
             $currentEndedAt =
                 $subscription->getEndedAt() ? new DateTime($subscription->getEndedAt()) : new DateTime();
 
             $newEndedAt = (clone $currentEndedAt)->modify('+' . $extendDuration);
             $subscription->setEndedAt($newEndedAt->format('Y-m-d H:i:s'));
+            $extended = $previousSubscription->getEndedAt() !== $subscription->getEndedAt();
         }
 
         // 6. Save subscription
@@ -182,6 +192,27 @@ class SubscriptionService
         $originalPlan = $this->planMapper->find($previousSubscription->getPlanId());
         if ($originalPlan !== null && !$originalPlan->getIsPublic() && $originalPlan->getId() !== $finalPlanId) {
             $this->planMapper->delete($originalPlan);
+        }
+
+        $organizationName = (string) ($organization->getName() ?? '');
+
+        if ($statusChanged) {
+            $this->notificationService->notifySubscriptionStatusChanged(
+                $organization->getId(),
+                $organizationName,
+                (string) ($originalStatus ?? ''),
+                (string) $subscription->getStatus(),
+                $changedByUserId,
+            );
+        }
+
+        if ($extended) {
+            $this->notificationService->notifySubscriptionExtended(
+                $organization->getId(),
+                $organizationName,
+                (string) ($subscription->getEndedAt() ?? ''),
+                $changedByUserId,
+            );
         }
 
         return $updatedSubscription;

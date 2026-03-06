@@ -35,5 +35,6 @@ This application provides organization management functionality including:
     </dependencies>
     <background-jobs>
         <job>OCA\Organization\BackgroundJob\CheckExpiredSubscriptions</job>
+        <job>OCA\Organization\BackgroundJob\RunAccountHandoverJob</job>
     </background-jobs>
 </info>

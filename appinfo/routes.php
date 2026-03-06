@@ -19,6 +19,11 @@ return [
         ['root' => '/apps/organization', 'name' => 'Organization#addOrganizationMember', 'url' => '/organizations/{organizationId}/members', 'verb' => 'POST'],
         ['root' => '/apps/organization', 'name' => 'Organization#removeOrganizationMember', 'url' => '/organizations/{organizationId}/members/{userId}', 'verb' => 'DELETE'],
         ['root' => '/apps/organization', 'name' => 'Organization#createOrganizationUser', 'url' => '/organizations/{organizationId}/users', 'verb' => 'POST'],
+        ['root' => '/apps/organization', 'name' => 'Organization#handoverOrganizationMember', 'url' => '/organizations/{organizationId}/handover', 'verb' => 'POST'],
+        ['root' => '/apps/organization', 'name' => 'Organization#listHandoverJobs', 'url' => '/organizations/{organizationId}/handover/jobs', 'verb' => 'GET'],
+        ['root' => '/apps/organization', 'name' => 'Organization#getHandoverJob', 'url' => '/organizations/{organizationId}/handover/jobs/{jobId}', 'verb' => 'GET'],
+        ['root' => '/apps/organization', 'name' => 'Organization#retryHandoverJob', 'url' => '/organizations/{organizationId}/handover/jobs/{jobId}/retry', 'verb' => 'POST'],
+        ['root' => '/apps/organization', 'name' => 'Organization#listHandoverEvents', 'url' => '/organizations/{organizationId}/handover/jobs/{jobId}/events', 'verb' => 'GET'],
         ['root' => '/apps/organization', 'name' => 'Organization#createOrganization', 'url' => '/organizations', 'verb' => 'POST'],
         ['root' => '/apps/organization', 'name' => 'Organization#updateSubscription', 'url' => '/organizations/{organizationId}/subscription', 'verb' => 'PUT'],
 

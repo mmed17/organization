@@ -49,6 +49,14 @@
 					<AccountAdd :size="18" />
 					<span>Create Account</span>
 				</button>
+				<button
+					v-if="canManageMembers"
+					class="tab-btn"
+					:class="{ active: activeTab === 'handover' }"
+					@click="activeTab = 'handover'">
+					<AccountArrowRight :size="18" />
+					<span>Account Handover</span>
+				</button>
 			</div>
 
 			<!-- Tab Content: Current Members -->
@@ -248,6 +256,13 @@
 				</div>
 			</div>
 
+			<!-- Tab Content: Account Handover -->
+			<div v-if="activeTab === 'handover'" class="tab-content">
+				<AccountHandover
+					:organization="organization"
+					:members="members" />
+			</div>
+
 			<!-- Member Limit Warning -->
 			<div v-if="seatsLeft === 0" class="limit-warning">
 				<AlertCircle :size="20" />
@@ -264,9 +279,12 @@ import axios from '@nextcloud/axios'
 import { generateOcsUrl } from '@nextcloud/router'
 import { vOnClickOutside as vClickOutside } from '@vueuse/components'
 
+import AccountHandover from './AccountHandover.vue'
+
 import AccountGroup from 'vue-material-design-icons/AccountGroup.vue'
 import AccountPlus from 'vue-material-design-icons/AccountPlus.vue'
 import AccountAdd from 'vue-material-design-icons/AccountPlus.vue'
+import AccountArrowRight from 'vue-material-design-icons/AccountArrowRight.vue'
 import Magnify from 'vue-material-design-icons/Magnify.vue'
 import Plus from 'vue-material-design-icons/Plus.vue'
 import Close from 'vue-material-design-icons/Close.vue'

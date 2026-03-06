@@ -5,6 +5,7 @@ namespace OCA\Organization\Db;
 
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Db\QBMapper;
+use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
 
 class SubscriptionMapper extends QBMapper
@@ -63,33 +64,60 @@ class SubscriptionMapper extends QBMapper
      * Finds all active subscriptions that have passed their end date
      * and updates their status to 'expired'.
      *
-     * @return int The number of subscriptions that were updated.
+     * @return Subscription[] The subscriptions that were expired (previous state).
      */
-    public function invalidateExpiredSubscriptions(): int
+    public function invalidateExpiredSubscriptions(): array
     {
         $now = (new \DateTime('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
         $findQuery = $this->db->getQueryBuilder();
-        $findQuery->select('id')
+        $findQuery->select(
+            'id',
+            'organization_id',
+            'plan_id',
+            'status',
+            'started_at',
+            'ended_at',
+            'paused_at',
+            'cancelled_at',
+        )
             ->from('subscriptions')
             ->where($findQuery->expr()->eq('status', $findQuery->createNamedParameter('active')))
             ->andWhere($findQuery->expr()->isNotNull('ended_at'))
             ->andWhere($findQuery->expr()->lt('ended_at', $findQuery->createNamedParameter($now)));
 
-        $result = $findQuery->execute();
-        $expiredSubscriptionIds = $result->fetchAll(\PDO::FETCH_COLUMN);
+        $result = $findQuery->executeQuery();
+        $rows = $result->fetchAll();
+        $result->closeCursor();
 
-        if (empty($expiredSubscriptionIds)) {
-            return 0;
+        if ($rows === []) {
+            return [];
         }
+
+        $expiredSubscriptionIds = array_map(static fn (array $row): int => (int) $row['id'], $rows);
 
         $updateQuery = $this->db->getQueryBuilder();
         $updateQuery->update('subscriptions')
             ->set('status', $updateQuery->createNamedParameter('expired'))
             ->where($updateQuery->expr()->in('id', $updateQuery->createParameter('ids')));
 
-        $updateQuery->setParameter('ids', $expiredSubscriptionIds, \OCP\DB\QueryBuilder\IQueryBuilder::PARAM_INT_ARRAY);
+        $updateQuery->setParameter('ids', $expiredSubscriptionIds, IQueryBuilder::PARAM_INT_ARRAY);
 
-        return $updateQuery->executeStatement();
+        $updateQuery->executeStatement();
+
+        return array_map(static function (array $row): Subscription {
+            $subscription = new Subscription();
+
+            $subscription->setId((int) $row['id']);
+            $subscription->setOrganizationId((int) $row['organization_id']);
+            $subscription->setPlanId((int) $row['plan_id']);
+            $subscription->setStatus((string) $row['status']);
+            $subscription->setStartedAt((string) $row['started_at']);
+            $subscription->setEndedAt($row['ended_at'] !== null ? (string) $row['ended_at'] : null);
+            $subscription->setPausedAt($row['paused_at'] !== null ? (string) $row['paused_at'] : null);
+            $subscription->setCancelledAt($row['cancelled_at'] !== null ? (string) $row['cancelled_at'] : null);
+
+            return $subscription;
+        }, $rows);
     }
 }

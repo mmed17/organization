@@ -8,7 +8,9 @@ use OCP\AppFramework\App;
 use OCP\AppFramework\Bootstrap\IBootContext;
 use OCP\AppFramework\Bootstrap\IBootstrap;
 use OCP\AppFramework\Bootstrap\IRegistrationContext;
+
 use OCA\Organization\Middleware\SubscriptionMiddleware;
+use OCA\Organization\Notification\OrganizationNotifier;
 
 class Application extends App implements IBootstrap
 {
@@ -23,6 +25,9 @@ class Application extends App implements IBootstrap
     {
         // Register the subscription middleware
         $context->registerMiddleware(SubscriptionMiddleware::class);
+
+        // Register the app's notification provider (bell notifications)
+        $context->registerNotifierService(OrganizationNotifier::class);
     }
 
     public function boot(IBootContext $context): void

@@ -3,27 +3,32 @@ declare(strict_types=1);
 
 namespace OCA\Organization\Controller;
 
+use OCP\AppFramework\Http\Attribute\NoAdminRequired;
+use OCP\AppFramework\Http\Attribute\PasswordConfirmationRequired;
 use OCP\AppFramework\Http\DataResponse;
+use OCP\AppFramework\OCS\OCSException;
 use OCP\AppFramework\OCS\OCSForbiddenException;
 use OCP\AppFramework\OCS\OCSNotFoundException;
 use OCP\AppFramework\OCSController;
+use OCP\IDBConnection;
 use OCP\IGroupManager;
 use OCP\IRequest;
 use OCP\IUserManager;
 use OCP\IUserSession;
-use OCP\IDBConnection;
+
+use OCA\Organization\Db\Organization;
 use OCA\Organization\Db\OrganizationMapper;
-use OCA\Organization\Db\SubscriptionMapper;
 use OCA\Organization\Db\PlanMapper;
+use OCA\Organization\Db\SubscriptionMapper;
 use OCA\Organization\Db\UserMapper;
-use OCA\Organization\Service\OrganizationService;
+use OCA\Organization\Service\AccountHandoverService;
+use OCA\Organization\Service\NotificationService;
 use OCA\Organization\Service\OrganizationAdminService;
+use OCA\Organization\Service\OrganizationService;
 use OCA\Organization\Service\SubscriptionService;
-use Psr\Log\LoggerInterface;
-use OCP\AppFramework\Http\Attribute\NoAdminRequired;
-use OCP\AppFramework\Http\Attribute\PasswordConfirmationRequired;
+
 use Exception;
-use OCP\AppFramework\OCS\OCSException;
+use Psr\Log\LoggerInterface;
 
 class OrganizationController extends OCSController
 {
@@ -37,6 +42,8 @@ class OrganizationController extends OCSController
         private UserMapper $userMapper,
         private OrganizationService $organizationService,
         private OrganizationAdminService $organizationAdminService,
+        private AccountHandoverService $accountHandoverService,
+        private NotificationService $notificationService,
         private SubscriptionService $subscriptionService,
         private IUserManager $userManager,
         private IGroupManager $groupManager,
@@ -244,6 +251,8 @@ class OrganizationController extends OCSController
     {
         $this->assertCanManageOrganization($organizationId, true);
 
+        $organization = $this->getOrganizationOrThrow($organizationId);
+
         $userId = trim($userId);
         if ($userId === '') {
             throw new OCSException('User ID is required', 104);
@@ -268,6 +277,13 @@ class OrganizationController extends OCSController
         $this->assertMemberCapacityAvailable($organizationId);
 
         $this->userMapper->addOrganizationToUser($userId, $organizationId, 'member');
+        $this->notificationService->notifyOrganizationMemberAdded(
+            $organizationId,
+            $organization->getName(),
+            $userId,
+            $user->getDisplayName(),
+            $this->userSession->getUser()?->getUID(),
+        );
 
         return new DataResponse([
             'members' => $this->buildMembersPayload($organizationId),
@@ -283,6 +299,8 @@ class OrganizationController extends OCSController
         ?string $email = null
     ): DataResponse {
         $this->assertCanManageOrganization($organizationId, true);
+
+        $organization = $this->getOrganizationOrThrow($organizationId);
 
         $userId = trim($userId);
         if ($userId === '' || trim($password) === '') {
@@ -319,6 +337,13 @@ class OrganizationController extends OCSController
             }
 
             $this->userMapper->addOrganizationToUser($userId, $organizationId, 'member');
+            $this->notificationService->notifyOrganizationMemberAdded(
+                $organizationId,
+                $organization->getName(),
+                $userId,
+                $user->getDisplayName(),
+                $this->userSession->getUser()?->getUID(),
+            );
         } catch (\Throwable $e) {
             $user->delete();
             throw new OCSException('Failed to assign user to organization: ' . $e->getMessage(), 104);
@@ -339,10 +364,7 @@ class OrganizationController extends OCSController
     {
         $this->assertCanManageOrganization($organizationId, true);
 
-        $organization = $this->organizationMapper->find($organizationId);
-        if ($organization === null) {
-            throw new OCSNotFoundException('Organization does not exist');
-        }
+        $organization = $this->getOrganizationOrThrow($organizationId);
 
         if ($organization->getAdminUid() === $userId) {
             throw new OCSException('Cannot remove organization admin from members', 104);
@@ -358,11 +380,124 @@ class OrganizationController extends OCSController
             throw new OCSNotFoundException('Organization member not found');
         }
 
+        $member = $this->userManager->get($userId);
         $this->userMapper->removeUserFromOrganization($userId);
+        $this->notificationService->notifyOrganizationMemberRemoved(
+            $organizationId,
+            $organization->getName(),
+            $userId,
+            $member?->getDisplayName(),
+            $this->userSession->getUser()?->getUID(),
+        );
 
         return new DataResponse([
             'members' => $this->buildMembersPayload($organizationId),
         ]);
+    }
+
+    #[NoAdminRequired]
+    public function handoverOrganizationMember(
+        int $organizationId,
+        string $sourceUserId,
+        string $targetUserId,
+        bool $dryRun = false,
+        bool $removeSourceFromGroups = false,
+        bool $remapDeckContent = true,
+    ): DataResponse {
+        $this->assertCanManageOrganization($organizationId, true);
+
+        $currentUser = $this->userSession->getUser();
+        if ($currentUser === null) {
+            throw new OCSForbiddenException('Authentication required');
+        }
+
+        try {
+            $idempotencyKey = $this->request->getHeader('Idempotency-Key');
+
+            $sourceUid = trim($sourceUserId);
+            $targetUid = trim($targetUserId);
+
+            if ($sourceUid === '' || $targetUid === '') {
+                throw new \InvalidArgumentException('sourceUserId and targetUserId are required');
+            }
+            $result = $this->accountHandoverService->createAndRun(
+                $organizationId,
+                $sourceUid,
+                $targetUid,
+                $currentUser->getUID(),
+                $dryRun,
+                $removeSourceFromGroups,
+                $remapDeckContent,
+                $idempotencyKey,
+            );
+
+            return new DataResponse($result);
+        } catch (\InvalidArgumentException $e) {
+            throw new OCSException($e->getMessage(), 104);
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to start account handover', [
+                'exception' => $e,
+                'organizationId' => $organizationId,
+                'sourceUserId' => $sourceUserId,
+                'targetUserId' => $targetUserId,
+                'requestedByUserId' => $currentUser->getUID(),
+                'dryRun' => $dryRun,
+            ]);
+
+            throw new OCSException('Failed to start account handover', 104);
+        }
+    }
+
+    #[NoAdminRequired]
+    public function getHandoverJob(int $organizationId, int $jobId): DataResponse
+    {
+        $this->assertCanManageOrganization($organizationId, true);
+
+        try {
+            return new DataResponse($this->accountHandoverService->getJob($organizationId, $jobId));
+        } catch (\InvalidArgumentException $e) {
+            throw new OCSNotFoundException($e->getMessage());
+        }
+    }
+
+    #[NoAdminRequired]
+    public function listHandoverJobs(int $organizationId, string $status = '', int $limit = 20, int $offset = 0): DataResponse
+    {
+        $this->assertCanManageOrganization($organizationId, true);
+
+        return new DataResponse($this->accountHandoverService->listJobs($organizationId, $status, $limit, $offset));
+    }
+
+    #[NoAdminRequired]
+    public function retryHandoverJob(int $organizationId, int $jobId, bool $failedStepsOnly = true): DataResponse
+    {
+        $this->assertCanManageOrganization($organizationId, true);
+
+        try {
+            $this->accountHandoverService->getJob($organizationId, $jobId);
+            return new DataResponse($this->accountHandoverService->retryJob($jobId, $failedStepsOnly));
+        } catch (\InvalidArgumentException $e) {
+            throw new OCSNotFoundException($e->getMessage());
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to retry account handover job', [
+                'exception' => $e,
+                'organizationId' => $organizationId,
+                'jobId' => $jobId,
+            ]);
+            throw new OCSException('Failed to retry account handover job', 104);
+        }
+    }
+
+    #[NoAdminRequired]
+    public function listHandoverEvents(int $organizationId, int $jobId, int $limit = 50, int $offset = 0): DataResponse
+    {
+        $this->assertCanManageOrganization($organizationId, true);
+
+        try {
+            return new DataResponse($this->accountHandoverService->listEvents($organizationId, $jobId, $limit, $offset));
+        } catch (\InvalidArgumentException $e) {
+            throw new OCSNotFoundException($e->getMessage());
+        }
     }
 
     /**
@@ -580,6 +715,19 @@ class OrganizationController extends OCSController
         if ($currentMembers >= $maxMembers) {
             throw new OCSForbiddenException('Organization member limit reached for current subscription plan');
         }
+    }
+
+    /**
+     * @throws OCSNotFoundException
+     */
+    private function getOrganizationOrThrow(int $organizationId): Organization
+    {
+        $organization = $this->organizationMapper->find($organizationId);
+        if ($organization === null) {
+            throw new OCSNotFoundException('Organization does not exist');
+        }
+
+        return $organization;
     }
 
     /**

@@ -1,0 +1,124 @@
+<?php
+
+declare(strict_types=1);
+
+namespace OCA\Organization\Notification;
+
+use OCP\L10N\IFactory;
+use OCP\Notification\INotification;
+use OCP\Notification\INotifier;
+use OCP\Notification\UnknownNotificationException;
+use OCP\IURLGenerator;
+
+final class OrganizationNotifier implements INotifier
+{
+    public function __construct(
+        private IFactory $l10nFactory,
+        private IURLGenerator $urlGenerator,
+    ) {
+    }
+
+    public function getID(): string
+    {
+        return NotificationConstants::APP_ID;
+    }
+
+    public function getName(): string
+    {
+        return 'Organization';
+    }
+
+    public function prepare(INotification $notification, string $languageCode): INotification
+    {
+        if ($notification->getApp() !== NotificationConstants::APP_ID) {
+            throw new UnknownNotificationException();
+        }
+
+        $l10n = $this->l10nFactory->get(NotificationConstants::APP_ID, $languageCode);
+
+        $subject = $notification->getSubject();
+        $parameters = $notification->getSubjectParameters();
+
+        $organizationName = isset($parameters['orgName']) ? (string) $parameters['orgName'] : '';
+
+        $notification->setIcon(
+            $this->urlGenerator->getAbsoluteURL(
+                $this->urlGenerator->imagePath(NotificationConstants::APP_ID, 'organization.svg')
+            )
+        );
+        $notification->setLink(
+            $this->urlGenerator->linkToRouteAbsolute('organization.Page.index')
+        );
+
+        switch ($subject) {
+            case NotificationConstants::SUBJECT_SUBSCRIPTION_STATUS_CHANGED: {
+                $newStatus = isset($parameters['newStatus']) ? (string) $parameters['newStatus'] : '';
+                $notification->setParsedSubject(
+                    $l10n->t('Subscription status changed for %s: %s', [$organizationName, $newStatus])
+                );
+                return $notification;
+            }
+
+            case NotificationConstants::SUBJECT_SUBSCRIPTION_EXTENDED: {
+                $newEndedAt = isset($parameters['newEndedAt']) ? (string) $parameters['newEndedAt'] : '';
+                $notification->setParsedSubject(
+                    $l10n->t('Subscription extended for %s until %s', [$organizationName, $newEndedAt])
+                );
+                return $notification;
+            }
+
+            case NotificationConstants::SUBJECT_SUBSCRIPTION_EXPIRED: {
+                $endedAt = isset($parameters['endedAt']) ? (string) $parameters['endedAt'] : '';
+                $notification->setParsedSubject(
+                    $l10n->t('Subscription expired for %s (ended %s)', [$organizationName, $endedAt])
+                );
+                return $notification;
+            }
+
+            case NotificationConstants::SUBJECT_ORGANIZATION_MEMBER_ADDED: {
+                $memberDisplayName = isset($parameters['memberDisplayName']) ? (string) $parameters['memberDisplayName'] : '';
+                $notification->setParsedSubject(
+                    $l10n->t('%s was added to %s', [$memberDisplayName, $organizationName])
+                );
+                return $notification;
+            }
+
+            case NotificationConstants::SUBJECT_ORGANIZATION_MEMBER_REMOVED: {
+                $memberDisplayName = isset($parameters['memberDisplayName']) ? (string) $parameters['memberDisplayName'] : '';
+                $notification->setParsedSubject(
+                    $l10n->t('%s was removed from %s', [$memberDisplayName, $organizationName])
+                );
+                return $notification;
+            }
+
+            case NotificationConstants::SUBJECT_ORGANIZATION_HANDOVER_STARTED: {
+                $sourceDisplayName = isset($parameters['sourceDisplayName']) ? (string) $parameters['sourceDisplayName'] : '';
+                $targetDisplayName = isset($parameters['targetDisplayName']) ? (string) $parameters['targetDisplayName'] : '';
+                $notification->setParsedSubject(
+                    $l10n->t('Account handover started in %s: %s → %s', [$organizationName, $sourceDisplayName, $targetDisplayName])
+                );
+                return $notification;
+            }
+
+            case NotificationConstants::SUBJECT_ORGANIZATION_HANDOVER_COMPLETED: {
+                $sourceDisplayName = isset($parameters['sourceDisplayName']) ? (string) $parameters['sourceDisplayName'] : '';
+                $targetDisplayName = isset($parameters['targetDisplayName']) ? (string) $parameters['targetDisplayName'] : '';
+                $notification->setParsedSubject(
+                    $l10n->t('Account handover completed in %s: %s → %s', [$organizationName, $sourceDisplayName, $targetDisplayName])
+                );
+                return $notification;
+            }
+
+            case NotificationConstants::SUBJECT_ORGANIZATION_HANDOVER_FAILED: {
+                $sourceDisplayName = isset($parameters['sourceDisplayName']) ? (string) $parameters['sourceDisplayName'] : '';
+                $targetDisplayName = isset($parameters['targetDisplayName']) ? (string) $parameters['targetDisplayName'] : '';
+                $notification->setParsedSubject(
+                    $l10n->t('Account handover failed in %s: %s → %s', [$organizationName, $sourceDisplayName, $targetDisplayName])
+                );
+                return $notification;
+            }
+        }
+
+        throw new UnknownNotificationException();
+    }
+}
