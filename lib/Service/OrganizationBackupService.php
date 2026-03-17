@@ -8,6 +8,7 @@ use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\Files\AppData\IAppDataFactory;
 use OCP\Files\IRootFolder;
 use OCP\Files\NotFoundException;
+use OCP\IConfig;
 use OCP\IDBConnection;
 use OCP\ITempManager;
 
@@ -21,8 +22,17 @@ class OrganizationBackupService
     private const JOBS_TABLE = 'org_backup_jobs';
     private const STEPS_TABLE = 'org_backup_steps';
     private const EVENTS_TABLE = 'org_backup_events';
+    private const FILE_INDEX_TABLE = 'org_backup_file_index';
 
     private const BACKUP_FOLDER = 'org-backups';
+    private const BACKUP_TYPE_FULL = 'full';
+    private const BACKUP_TYPE_INCREMENTAL = 'incremental';
+    private const TRIGGER_MANUAL = 'manual';
+    private const TRIGGER_SCHEDULED = 'scheduled';
+    private const RETENTION_INCREMENTAL = 14;
+    private const RETENTION_FULL = 8;
+    private const SCHEDULE_DAILY_TIME = '02:00';
+    private const SCHEDULE_WEEKLY_TIME = '03:00';
 
     /** @var list<string> */
     private const STEP_ORDER = ['collect_db', 'export_deck', 'export_files', 'finalize'];
@@ -32,6 +42,7 @@ class OrganizationBackupService
         private IAppDataFactory $appDataFactory,
         private IRootFolder $rootFolder,
         private ITempManager $tempManager,
+        private IConfig $config,
         private LoggerInterface $logger,
     ) {
     }
@@ -40,7 +51,16 @@ class OrganizationBackupService
      * @param array<string,mixed> $options
      * @return array<string,mixed>
      */
-    public function createJob(int $organizationId, string $requestedByUid, array $options = []): array
+    public function createJob(
+        int $organizationId,
+        string $requestedByUid,
+        array $options = [],
+        string $backupType = self::BACKUP_TYPE_FULL,
+        string $triggerSource = self::TRIGGER_MANUAL,
+        ?int $baselineJobId = null,
+        ?int $baseFullJobId = null,
+        ?string $scheduleKey = null,
+    ): array
     {
         if ($organizationId <= 0) {
             throw new \InvalidArgumentException('organizationId must be a positive integer');
@@ -51,6 +71,13 @@ class OrganizationBackupService
             throw new \InvalidArgumentException('requestedByUid must not be empty');
         }
 
+        $backupType = $this->normalizeBackupType($backupType);
+        $triggerSource = $this->normalizeTriggerSource($triggerSource);
+        $scheduleKey = $scheduleKey !== null ? trim($scheduleKey) : null;
+        if ($scheduleKey === '') {
+            $scheduleKey = null;
+        }
+
         $now = $this->utcNow();
         $expiresAt = $this->utcNowPlusSeconds(24 * 60 * 60);
 
@@ -59,6 +86,11 @@ class OrganizationBackupService
             ->values([
                 'organization_id' => $insert->createNamedParameter($organizationId, IQueryBuilder::PARAM_INT),
                 'requested_by_uid' => $insert->createNamedParameter($requestedByUid, IQueryBuilder::PARAM_STR),
+                'backup_type' => $insert->createNamedParameter($backupType, IQueryBuilder::PARAM_STR),
+                'trigger_source' => $insert->createNamedParameter($triggerSource, IQueryBuilder::PARAM_STR),
+                'baseline_job_id' => $insert->createNamedParameter($baselineJobId),
+                'base_full_job_id' => $insert->createNamedParameter($baseFullJobId),
+                'schedule_key' => $insert->createNamedParameter($scheduleKey),
                 'status' => $insert->createNamedParameter('queued', IQueryBuilder::PARAM_STR),
                 'options_json' => $insert->createNamedParameter(json_encode($options, JSON_THROW_ON_ERROR), IQueryBuilder::PARAM_STR),
                 'attempt' => $insert->createNamedParameter(1, IQueryBuilder::PARAM_INT),
@@ -95,6 +127,11 @@ class OrganizationBackupService
         $this->insertEvent($jobId, 'info', 'Organization backup job queued', [
             'organizationId' => $organizationId,
             'requestedByUid' => $requestedByUid,
+            'backupType' => $backupType,
+            'triggerSource' => $triggerSource,
+            'baselineJobId' => $baselineJobId,
+            'baseFullJobId' => $baseFullJobId,
+            'scheduleKey' => $scheduleKey,
             'expiresAt' => $expiresAt,
         ]);
 
@@ -108,7 +145,13 @@ class OrganizationBackupService
 
     public function getOldestQueuedJobId(): ?int
     {
-        $this->cleanupExpired();
+        try {
+            $this->cleanupExpired();
+        } catch (\Throwable $e) {
+            $this->logger->error('Backup cleanup failed before queue fetch', [
+                'exception' => $e,
+            ]);
+        }
 
         $qb = $this->db->getQueryBuilder();
         $result = $qb->select('id')
@@ -122,6 +165,78 @@ class OrganizationBackupService
         $result->closeCursor();
 
         return $jobId === false ? null : (int) $jobId;
+    }
+
+    public function enqueueScheduledJobs(): void
+    {
+        $timeZone = $this->resolveInstanceTimeZone();
+        $nowLocal = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->setTimezone($timeZone);
+        $scheduleKey = $nowLocal->format('Y-m-d');
+
+        $isSunday = (int) $nowLocal->format('N') === 7;
+        if ($isSunday) {
+            if ($nowLocal->format('H:i') < self::SCHEDULE_WEEKLY_TIME) {
+                return;
+            }
+            $scheduledType = self::BACKUP_TYPE_FULL;
+        } else {
+            if ($nowLocal->format('H:i') < self::SCHEDULE_DAILY_TIME) {
+                return;
+            }
+            $scheduledType = self::BACKUP_TYPE_INCREMENTAL;
+        }
+
+        try {
+            $organizationIds = $this->listOrganizationIds();
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to list organizations for scheduled backups', [
+                'exception' => $e,
+            ]);
+            return;
+        }
+
+        foreach ($organizationIds as $organizationId) {
+            $resolvedType = $scheduledType;
+            $baselineJobId = $this->findLatestCompletedJobId($organizationId);
+            if ($scheduledType === self::BACKUP_TYPE_INCREMENTAL && $baselineJobId === null) {
+                $resolvedType = self::BACKUP_TYPE_FULL;
+            }
+
+            $baseFullJobId = $this->findLatestCompletedJobIdByType($organizationId, self::BACKUP_TYPE_FULL);
+
+            if ($this->hasScheduledJobForScheduleKey($organizationId, $scheduleKey)) {
+                continue;
+            }
+
+            if ($this->hasInProgressJobOfType($organizationId, $resolvedType)) {
+                continue;
+            }
+
+            try {
+                $this->createJob(
+                    $organizationId,
+                    '__system__',
+                    [
+                        'includeProjectCreator' => true,
+                        'includeDeck' => true,
+                        'includeSharedFiles' => true,
+                        'excludePrivateData' => true,
+                    ],
+                    $resolvedType,
+                    self::TRIGGER_SCHEDULED,
+                    $baselineJobId,
+                    $baseFullJobId,
+                    $scheduleKey,
+                );
+            } catch (\Throwable $e) {
+                $this->logger->error('Failed to enqueue scheduled backup job', [
+                    'exception' => $e,
+                    'organizationId' => $organizationId,
+                    'backupType' => $resolvedType,
+                    'scheduleKey' => $scheduleKey,
+                ]);
+            }
+        }
     }
 
     /**
@@ -166,6 +281,34 @@ class OrganizationBackupService
             $requestedByUid = (string) $job['requested_by_uid'];
             $options = $this->decodeJsonNullable($job['options_json']);
             $options = is_array($options) ? $options : [];
+            $backupType = $this->normalizeBackupType((string) ($job['backup_type'] ?? self::BACKUP_TYPE_FULL));
+            $triggerSource = $this->normalizeTriggerSource((string) ($job['trigger_source'] ?? self::TRIGGER_MANUAL));
+            $baselineJobId = isset($job['baseline_job_id']) ? (int) $job['baseline_job_id'] : null;
+            $baseFullJobId = isset($job['base_full_job_id']) ? (int) $job['base_full_job_id'] : null;
+
+            if ($backupType === self::BACKUP_TYPE_INCREMENTAL) {
+                if ($baselineJobId === null || $baselineJobId <= 0) {
+                    $baselineJobId = $this->findLatestCompletedJobId($organizationId);
+                }
+                if ($baseFullJobId === null || $baseFullJobId <= 0) {
+                    $baseFullJobId = $this->findLatestCompletedJobIdByType($organizationId, self::BACKUP_TYPE_FULL);
+                }
+
+                if ($baselineJobId === null || $baselineJobId <= 0) {
+                    $backupType = self::BACKUP_TYPE_FULL;
+                    $this->insertEvent($jobId, 'info', 'Incremental backup upgraded to full backup', [
+                        'reason' => 'No previous successful backup baseline',
+                    ]);
+                }
+            }
+
+            $this->updateJob($jobId, [
+                'backup_type' => $backupType,
+                'trigger_source' => $triggerSource,
+                'baseline_job_id' => $baselineJobId,
+                'base_full_job_id' => $baseFullJobId,
+                'updated_at' => $this->utcNow(),
+            ]);
 
             $artifactName = $this->buildArtifactName($organizationId, $jobId);
 
@@ -175,6 +318,10 @@ class OrganizationBackupService
                 'generatedAt' => $this->utcNowIso8601(),
                 'organizationId' => $organizationId,
                 'requestedByUid' => $requestedByUid,
+                'backupType' => $backupType,
+                'triggerSource' => $triggerSource,
+                'baselineJobId' => $baselineJobId,
+                'baseFullJobId' => $baseFullJobId,
                 'options' => $options,
             ];
             $this->markStepCompleted($jobId, 'collect_db', ['status' => 'completed']);
@@ -191,7 +338,9 @@ class OrganizationBackupService
 
             $this->markStepRunning($jobId, 'finalize');
             $tmpPath = $this->createTempFilePath('.zip');
-            $zipSummary = $this->generateZipToPath($organizationId, $tmpPath, $artifactName, $summary);
+            $zipResult = $this->generateZipToPath($organizationId, $jobId, $backupType, $tmpPath, $artifactName, $summary);
+            $fileIndexEntries = isset($zipResult['fileIndexEntries']) && is_array($zipResult['fileIndexEntries']) ? $zipResult['fileIndexEntries'] : [];
+            unset($zipResult['fileIndexEntries']);
             $artifactSize = filesize($tmpPath);
             if ($artifactSize === false) {
                 $artifactSize = null;
@@ -205,7 +354,7 @@ class OrganizationBackupService
                 'artifactName' => $artifactName,
                 'artifactSize' => $artifactSize,
                 'expiresAt' => (string) $job['expires_at'],
-                'summary' => $zipSummary,
+                'summary' => $zipResult,
             ];
 
             $this->updateJob($jobId, [
@@ -222,6 +371,7 @@ class OrganizationBackupService
                 'artifactSize' => $artifactSize,
             ]);
             $this->markStepCompleted($jobId, 'finalize', $result);
+            $this->replaceFileIndexSnapshot($organizationId, $jobId, $fileIndexEntries);
 
             $jobRow = $this->getJobRowById($jobId);
             if ($jobRow === null) {
@@ -399,6 +549,89 @@ class OrganizationBackupService
             ]);
         }
         $result->closeCursor();
+
+        try {
+            $this->cleanupRetentionPolicy();
+        } catch (\Throwable $e) {
+            $this->logger->error('Backup retention cleanup failed', [
+                'exception' => $e,
+            ]);
+        }
+    }
+
+    private function cleanupRetentionPolicy(): void
+    {
+        foreach ($this->listOrganizationsWithCompletedBackups() as $organizationId) {
+            $this->enforceRetentionForType($organizationId, self::BACKUP_TYPE_INCREMENTAL, self::RETENTION_INCREMENTAL);
+            $this->enforceRetentionForType($organizationId, self::BACKUP_TYPE_FULL, self::RETENTION_FULL);
+        }
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function listOrganizationsWithCompletedBackups(): array
+    {
+        $qb = $this->db->getQueryBuilder();
+        $result = $qb->selectDistinct('organization_id')
+            ->from(self::JOBS_TABLE)
+            ->where($qb->expr()->eq('status', $qb->createNamedParameter('completed')))
+            ->executeQuery();
+
+        $organizationIds = [];
+        while (($row = $result->fetch()) !== false) {
+            $organizationId = isset($row['organization_id']) ? (int) $row['organization_id'] : 0;
+            if ($organizationId > 0) {
+                $organizationIds[] = $organizationId;
+            }
+        }
+        $result->closeCursor();
+
+        return $organizationIds;
+    }
+
+    private function enforceRetentionForType(int $organizationId, string $backupType, int $keep): void
+    {
+        if ($keep < 1) {
+            return;
+        }
+
+        $qb = $this->db->getQueryBuilder();
+        $result = $qb->select('*')
+            ->from(self::JOBS_TABLE)
+            ->where($qb->expr()->eq('organization_id', $qb->createNamedParameter($organizationId, IQueryBuilder::PARAM_INT)))
+            ->andWhere($qb->expr()->eq('status', $qb->createNamedParameter('completed')))
+            ->andWhere($qb->expr()->eq('backup_type', $qb->createNamedParameter($backupType)))
+            ->orderBy('finished_at', 'DESC')
+            ->addOrderBy('id', 'DESC')
+            ->setFirstResult($keep)
+            ->executeQuery();
+
+        $now = $this->utcNow();
+        while (($row = $result->fetch()) !== false) {
+            $jobId = isset($row['id']) ? (int) $row['id'] : 0;
+            if ($jobId <= 0) {
+                continue;
+            }
+
+            $artifactName = isset($row['artifact_name']) ? (string) $row['artifact_name'] : '';
+            if ($artifactName !== '') {
+                $this->deleteArtifactIfExists($organizationId, $artifactName);
+            }
+
+            $this->updateJob($jobId, [
+                'status' => 'deleted',
+                'updated_at' => $now,
+                'finished_at' => $row['finished_at'] ?? $now,
+                'artifact_name' => null,
+                'artifact_size' => null,
+            ]);
+            $this->insertEvent($jobId, 'info', 'Backup removed by retention policy', [
+                'backupType' => $backupType,
+                'previousArtifactName' => $artifactName !== '' ? $artifactName : null,
+            ]);
+        }
+        $result->closeCursor();
     }
 
     public function openArtifactStream(int $organizationId, string $artifactName)
@@ -428,6 +661,45 @@ class OrganizationBackupService
         return $folder->fileExists($artifactName);
     }
 
+    public function markJobPickedByWorker(int $jobId): void
+    {
+        $row = $this->getJobRowById($jobId);
+        if ($row === null) {
+            return;
+        }
+
+        $this->insertEvent($jobId, 'info', 'Backup job picked by worker', [
+            'status' => (string) ($row['status'] ?? 'unknown'),
+            'pickedAt' => $this->utcNowIso8601(),
+        ]);
+    }
+
+    public function markJobFailedFromWorker(int $jobId, \Throwable $e): void
+    {
+        $failedAt = $this->utcNow();
+        try {
+            $this->updateJob($jobId, [
+                'status' => 'failed',
+                'error_message' => $e->getMessage(),
+                'finished_at' => $failedAt,
+                'updated_at' => $failedAt,
+            ]);
+            $this->insertEvent($jobId, 'error', 'Backup failed before execution start', [
+                'error' => $e->getMessage(),
+            ]);
+        } catch (\Throwable $inner) {
+            $this->logger->error('Failed to mark backup job as failed after worker exception', [
+                'exception' => $inner,
+                'jobId' => $jobId,
+            ]);
+        }
+
+        $this->logger->error('Backup worker execution failed', [
+            'exception' => $e,
+            'jobId' => $jobId,
+        ]);
+    }
+
     /**
      * @return array<string,mixed>
      */
@@ -439,6 +711,11 @@ class OrganizationBackupService
             'jobId' => $jobId,
             'organizationId' => (int) $row['organization_id'],
             'requestedByUid' => (string) $row['requested_by_uid'],
+            'backupType' => $this->normalizeBackupType((string) ($row['backup_type'] ?? self::BACKUP_TYPE_FULL)),
+            'triggerSource' => $this->normalizeTriggerSource((string) ($row['trigger_source'] ?? self::TRIGGER_MANUAL)),
+            'baselineJobId' => isset($row['baseline_job_id']) ? (int) $row['baseline_job_id'] : null,
+            'baseFullJobId' => isset($row['base_full_job_id']) ? (int) $row['base_full_job_id'] : null,
+            'scheduleKey' => $row['schedule_key'] ?? null,
             'status' => (string) $row['status'],
             'attempt' => (int) ($row['attempt'] ?? 1),
             'options' => $this->decodeJsonNullable($row['options_json']),
@@ -520,6 +797,136 @@ class OrganizationBackupService
         return (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
             ->add(new \DateInterval(sprintf('PT%dS', max(0, $seconds))))
             ->format('Y-m-d H:i:s');
+    }
+
+    private function normalizeBackupType(string $backupType): string
+    {
+        $backupType = strtolower(trim($backupType));
+        if ($backupType === self::BACKUP_TYPE_INCREMENTAL) {
+            return self::BACKUP_TYPE_INCREMENTAL;
+        }
+        return self::BACKUP_TYPE_FULL;
+    }
+
+    private function normalizeTriggerSource(string $triggerSource): string
+    {
+        $triggerSource = strtolower(trim($triggerSource));
+        if ($triggerSource === self::TRIGGER_SCHEDULED) {
+            return self::TRIGGER_SCHEDULED;
+        }
+        return self::TRIGGER_MANUAL;
+    }
+
+    private function resolveInstanceTimeZone(): \DateTimeZone
+    {
+        $name = 'UTC';
+        try {
+            $value = $this->config->getSystemValue('default_timezone', 'UTC');
+            if (is_string($value) && trim($value) !== '') {
+                $name = trim($value);
+            }
+        } catch (\Throwable) {
+        }
+
+        try {
+            return new \DateTimeZone($name);
+        } catch (\Throwable) {
+            return new \DateTimeZone('UTC');
+        }
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function listOrganizationIds(): array
+    {
+        $qb = $this->db->getQueryBuilder();
+        $result = $qb->select('id')
+            ->from('organizations')
+            ->orderBy('id', 'ASC')
+            ->executeQuery();
+
+        $organizationIds = [];
+        while (($row = $result->fetch()) !== false) {
+            $organizationId = isset($row['id']) ? (int) $row['id'] : 0;
+            if ($organizationId > 0) {
+                $organizationIds[] = $organizationId;
+            }
+        }
+        $result->closeCursor();
+
+        return $organizationIds;
+    }
+
+    private function hasScheduledJobForScheduleKey(int $organizationId, string $scheduleKey): bool
+    {
+        $qb = $this->db->getQueryBuilder();
+        $result = $qb->select('id')
+            ->from(self::JOBS_TABLE)
+            ->where($qb->expr()->eq('organization_id', $qb->createNamedParameter($organizationId, IQueryBuilder::PARAM_INT)))
+            ->andWhere($qb->expr()->eq('trigger_source', $qb->createNamedParameter(self::TRIGGER_SCHEDULED)))
+            ->andWhere($qb->expr()->eq('schedule_key', $qb->createNamedParameter($scheduleKey)))
+            ->setMaxResults(1)
+            ->executeQuery();
+
+        $id = $result->fetchOne();
+        $result->closeCursor();
+
+        return $id !== false;
+    }
+
+    private function hasInProgressJobOfType(int $organizationId, string $backupType): bool
+    {
+        $qb = $this->db->getQueryBuilder();
+        $result = $qb->select('id')
+            ->from(self::JOBS_TABLE)
+            ->where($qb->expr()->eq('organization_id', $qb->createNamedParameter($organizationId, IQueryBuilder::PARAM_INT)))
+            ->andWhere($qb->expr()->eq('backup_type', $qb->createNamedParameter($backupType)))
+            ->andWhere($qb->expr()->in('status', $qb->createNamedParameter(['queued', 'running'], IQueryBuilder::PARAM_STR_ARRAY)))
+            ->setMaxResults(1)
+            ->executeQuery();
+
+        $id = $result->fetchOne();
+        $result->closeCursor();
+
+        return $id !== false;
+    }
+
+    private function findLatestCompletedJobId(int $organizationId): ?int
+    {
+        $qb = $this->db->getQueryBuilder();
+        $result = $qb->select('id')
+            ->from(self::JOBS_TABLE)
+            ->where($qb->expr()->eq('organization_id', $qb->createNamedParameter($organizationId, IQueryBuilder::PARAM_INT)))
+            ->andWhere($qb->expr()->eq('status', $qb->createNamedParameter('completed')))
+            ->orderBy('finished_at', 'DESC')
+            ->addOrderBy('id', 'DESC')
+            ->setMaxResults(1)
+            ->executeQuery();
+
+        $id = $result->fetchOne();
+        $result->closeCursor();
+
+        return $id === false ? null : (int) $id;
+    }
+
+    private function findLatestCompletedJobIdByType(int $organizationId, string $backupType): ?int
+    {
+        $qb = $this->db->getQueryBuilder();
+        $result = $qb->select('id')
+            ->from(self::JOBS_TABLE)
+            ->where($qb->expr()->eq('organization_id', $qb->createNamedParameter($organizationId, IQueryBuilder::PARAM_INT)))
+            ->andWhere($qb->expr()->eq('status', $qb->createNamedParameter('completed')))
+            ->andWhere($qb->expr()->eq('backup_type', $qb->createNamedParameter($backupType)))
+            ->orderBy('finished_at', 'DESC')
+            ->addOrderBy('id', 'DESC')
+            ->setMaxResults(1)
+            ->executeQuery();
+
+        $id = $result->fetchOne();
+        $result->closeCursor();
+
+        return $id === false ? null : (int) $id;
     }
 
     private function buildArtifactName(int $organizationId, int $jobId): string
@@ -825,7 +1232,14 @@ class OrganizationBackupService
      * @param array<string,mixed> $preSummary
      * @return array<string,mixed>
      */
-    private function generateZipToPath(int $organizationId, string $tmpZipPath, string $artifactName, array $preSummary): array
+    private function generateZipToPath(
+        int $organizationId,
+        int $jobId,
+        string $backupType,
+        string $tmpZipPath,
+        string $artifactName,
+        array $preSummary,
+    ): array
     {
         $out = fopen($tmpZipPath, 'wb');
         if ($out === false) {
@@ -846,13 +1260,16 @@ class OrganizationBackupService
             'projects' => 0,
             'deckBoards' => 0,
             'files' => 0,
+            'deletedFiles' => 0,
         ];
+        $fileIndexEntries = [];
+        $deletedFiles = [];
 
         try {
             $this->addDbSection($zip, $organizationId, $counts, $warnings);
             $this->addProjectCreatorSection($zip, $organizationId, $counts, $warnings);
             $this->addDeckSection($zip, $organizationId, $counts, $warnings);
-            $this->addFilesSection($zip, $organizationId, $counts, $warnings);
+            $this->addFilesSection($zip, $organizationId, $jobId, $backupType, $counts, $warnings, $fileIndexEntries, $deletedFiles);
 
             $manifest = [
                 'formatVersion' => 1,
@@ -865,6 +1282,9 @@ class OrganizationBackupService
             if ($warnings !== []) {
                 $manifest['warnings'] = $warnings;
             }
+            if ($deletedFiles !== []) {
+                $manifest['deletedFiles'] = $deletedFiles;
+            }
 
             $this->addJsonFile($zip, 'manifest.json', $manifest);
         } finally {
@@ -875,6 +1295,8 @@ class OrganizationBackupService
         return [
             'counts' => $counts,
             'warnings' => $warnings,
+            'deletedFiles' => $deletedFiles,
+            'fileIndexEntries' => $fileIndexEntries,
         ];
     }
 
@@ -988,46 +1410,76 @@ class OrganizationBackupService
     /**
      * @param array<string,int> $counts
      * @param list<string> $warnings
+     * @param list<array<string,mixed>> $fileIndexEntries
+     * @param list<array<string,mixed>> $deletedFiles
      */
-    private function addFilesSection(ZipStreamer $zip, int $organizationId, array &$counts, array &$warnings): void
-    {
-        $projects = [];
-        try {
-            $projects = $this->findProjectRowsForOrganization($organizationId);
-        } catch (\Throwable $e) {
-            $warnings[] = 'ProjectCreatorAIO tables unavailable; shared file export skipped';
-            $this->logger->debug('Shared file export skipped', ['exception' => $e]);
+    private function addFilesSection(
+        ZipStreamer $zip,
+        int $organizationId,
+        int $jobId,
+        string $backupType,
+        array &$counts,
+        array &$warnings,
+        array &$fileIndexEntries,
+        array &$deletedFiles,
+    ): void {
+        $scanResult = $this->scanOrganizationFiles($organizationId, $warnings);
+        if (($scanResult['scanFailed'] ?? false) === true) {
+            throw new \RuntimeException('Shared files scan failed');
+        }
+        $currentEntries = $scanResult['entries'];
+        $fileIndexEntries = $scanResult['indexEntries'];
+
+        if ($backupType === self::BACKUP_TYPE_FULL) {
+            foreach ($currentEntries as $entry) {
+                $this->addFileEntryToZip($zip, $entry, $counts);
+            }
             return;
         }
 
-        foreach ($projects as $project) {
-            $projectId = isset($project['id']) ? (int) $project['id'] : 0;
-            $folderId = isset($project['folder_id']) ? (int) $project['folder_id'] : 0;
-            $projectName = isset($project['name']) ? (string) $project['name'] : '';
+        $previousIndex = $this->getFileIndexSnapshotByOrganization($organizationId);
+        $currentByFileId = [];
+        foreach ($currentEntries as $entry) {
+            $fileId = (int) ($entry['fileId'] ?? 0);
+            if ($fileId > 0) {
+                $currentByFileId[$fileId] = $entry;
+            }
+        }
 
-            if ($projectId <= 0 || $folderId <= 0) {
+        foreach ($currentEntries as $entry) {
+            $fileId = (int) ($entry['fileId'] ?? 0);
+            if ($fileId <= 0) {
+                $this->addFileEntryToZip($zip, $entry, $counts);
                 continue;
             }
 
-            try {
-                $folder = $this->resolveFolderById($folderId);
-                if ($folder === null) {
-                    $warnings[] = sprintf('Project %d shared folder not found (folder_id=%d)', $projectId, $folderId);
-                    continue;
-                }
-
-                $base = sprintf('files/projects/%d/%s/', $projectId, $this->sanitizeZipPathSegment($projectName !== '' ? $projectName : 'shared'));
-                $this->addFolderRecursiveToZip($zip, $folder, $base, $counts);
-            } catch (\Throwable $e) {
-                $warnings[] = sprintf('Failed to export shared files for project %d', $projectId);
-                $this->logger->debug('Shared file export failed', [
-                    'exception' => $e,
-                    'organizationId' => $organizationId,
-                    'projectId' => $projectId,
-                    'folderId' => $folderId,
-                ]);
+            $existing = $previousIndex[$fileId] ?? null;
+            if ($existing === null || $this->didFileEntryChange($entry, $existing)) {
+                $this->addFileEntryToZip($zip, $entry, $counts);
             }
         }
+
+        foreach ($previousIndex as $fileId => $existing) {
+            if (isset($currentByFileId[$fileId])) {
+                continue;
+            }
+
+            $deletedFiles[] = [
+                'fileId' => $fileId,
+                'path' => (string) ($existing['path'] ?? ''),
+                'size' => isset($existing['size']) ? (int) $existing['size'] : null,
+                'mtime' => isset($existing['mtime']) ? (int) $existing['mtime'] : null,
+                'etag' => isset($existing['etag']) ? (string) $existing['etag'] : null,
+                'jobId' => $jobId,
+            ];
+        }
+        $counts['deletedFiles'] = count($deletedFiles);
+
+        $this->addJsonFile($zip, 'changes/deleted_files.json', [
+            'jobId' => $jobId,
+            'organizationId' => $organizationId,
+            'deletedFiles' => $deletedFiles,
+        ]);
     }
 
     private function sanitizeZipPathSegment(string $value): string
@@ -1052,32 +1504,146 @@ class OrganizationBackupService
     }
 
     /**
-     * @param array<string,int> $counts
+     * @param list<string> $warnings
+     * @return array{entries:list<array<string,mixed>>,indexEntries:list<array<string,mixed>>,scanFailed:bool}
      */
-    private function addFolderRecursiveToZip(ZipStreamer $zip, \OCP\Files\Folder $folder, string $zipBasePath, array &$counts): void
+    private function scanOrganizationFiles(int $organizationId, array &$warnings): array
     {
-        $zip->addEmptyDir(rtrim($zipBasePath, '/'));
+        $projects = [];
+        try {
+            $projects = $this->findProjectRowsForOrganization($organizationId);
+        } catch (\Throwable $e) {
+            $warnings[] = 'ProjectCreatorAIO tables unavailable; shared file export skipped';
+            $this->logger->debug('Shared file export skipped', ['exception' => $e]);
+            return ['entries' => [], 'indexEntries' => [], 'scanFailed' => true];
+        }
 
+        $entries = [];
+        $indexEntries = [];
+        foreach ($projects as $project) {
+            $projectId = isset($project['id']) ? (int) $project['id'] : 0;
+            $folderId = isset($project['folder_id']) ? (int) $project['folder_id'] : 0;
+            $projectName = isset($project['name']) ? (string) $project['name'] : '';
+            if ($projectId <= 0 || $folderId <= 0) {
+                continue;
+            }
+
+            try {
+                $folder = $this->resolveFolderById($folderId);
+                if ($folder === null) {
+                    $warnings[] = sprintf('Project %d shared folder not found (folder_id=%d)', $projectId, $folderId);
+                    continue;
+                }
+
+                $base = sprintf('files/projects/%d/%s/', $projectId, $this->sanitizeZipPathSegment($projectName !== '' ? $projectName : 'shared'));
+                $this->collectFolderFileEntries($folder, $base, $projectId, $entries, $indexEntries);
+            } catch (\Throwable $e) {
+                $warnings[] = sprintf('Failed to scan shared files for project %d', $projectId);
+                $this->logger->debug('Shared file scan failed', [
+                    'exception' => $e,
+                    'organizationId' => $organizationId,
+                    'projectId' => $projectId,
+                    'folderId' => $folderId,
+                ]);
+            }
+        }
+
+        return [
+            'entries' => $entries,
+            'indexEntries' => $indexEntries,
+            'scanFailed' => false,
+        ];
+    }
+
+    /**
+     * @param list<array<string,mixed>> $entries
+     * @param list<array<string,mixed>> $indexEntries
+     */
+    private function collectFolderFileEntries(
+        \OCP\Files\Folder $folder,
+        string $zipBasePath,
+        int $projectId,
+        array &$entries,
+        array &$indexEntries,
+    ): void {
         foreach ($folder->getDirectoryListing() as $node) {
             $name = $this->sanitizeZipPathSegment($node->getName());
             $internal = $zipBasePath . $name;
 
             if ($node instanceof \OCP\Files\Folder) {
-                $this->addFolderRecursiveToZip($zip, $node, $internal . '/', $counts);
+                $this->collectFolderFileEntries($node, $internal . '/', $projectId, $entries, $indexEntries);
                 continue;
             }
 
-            if ($node instanceof \OCP\Files\File) {
-                $stream = $node->fopen('rb');
-                if ($stream === false) {
-                    continue;
-                }
-                $zip->addFileFromStream($stream, $internal, [
-                    'timestamp' => $node->getMTime(),
-                ]);
-                fclose($stream);
-                $counts['files']++;
+            if (!$node instanceof \OCP\Files\File) {
+                continue;
             }
+
+            $fileId = (int) $node->getId();
+            $mtime = (int) $node->getMTime();
+            $size = (int) $node->getSize();
+            $etag = (string) $node->getEtag();
+
+            $entries[] = [
+                'fileId' => $fileId,
+                'projectId' => $projectId,
+                'path' => $internal,
+                'mtime' => $mtime,
+                'size' => $size,
+                'etag' => $etag,
+                'node' => $node,
+            ];
+
+            if ($fileId > 0) {
+                $indexEntries[] = [
+                    'fileId' => $fileId,
+                    'projectId' => $projectId,
+                    'path' => $internal,
+                    'mtime' => $mtime,
+                    'size' => $size,
+                    'etag' => $etag,
+                ];
+            }
+        }
+    }
+
+    private function didFileEntryChange(array $current, array $previous): bool
+    {
+        if (((string) ($current['etag'] ?? '')) !== ((string) ($previous['etag'] ?? ''))) {
+            return true;
+        }
+        if (((int) ($current['mtime'] ?? 0)) !== ((int) ($previous['mtime'] ?? 0))) {
+            return true;
+        }
+        if (((int) ($current['size'] ?? 0)) !== ((int) ($previous['size'] ?? 0))) {
+            return true;
+        }
+        return ((string) ($current['path'] ?? '')) !== ((string) ($previous['path'] ?? ''));
+    }
+
+    /**
+     * @param array<string,mixed> $entry
+     * @param array<string,int> $counts
+     */
+    private function addFileEntryToZip(ZipStreamer $zip, array $entry, array &$counts): void
+    {
+        $node = $entry['node'] ?? null;
+        if (!$node instanceof \OCP\Files\File) {
+            return;
+        }
+
+        $stream = $node->fopen('rb');
+        if ($stream === false) {
+            return;
+        }
+
+        try {
+            $zip->addFileFromStream($stream, (string) $entry['path'], [
+                'timestamp' => (int) ($entry['mtime'] ?? 0),
+            ]);
+            $counts['files']++;
+        } finally {
+            fclose($stream);
         }
     }
 
@@ -1111,6 +1677,69 @@ class OrganizationBackupService
         } finally {
             fclose($rfh);
             @unlink($tmpPath);
+        }
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private function getFileIndexSnapshotByOrganization(int $organizationId): array
+    {
+        $qb = $this->db->getQueryBuilder();
+        $result = $qb->select('*')
+            ->from(self::FILE_INDEX_TABLE)
+            ->where($qb->expr()->eq('organization_id', $qb->createNamedParameter($organizationId, IQueryBuilder::PARAM_INT)))
+            ->executeQuery();
+
+        $index = [];
+        while (($row = $result->fetch()) !== false) {
+            $fileId = isset($row['file_id']) ? (int) $row['file_id'] : 0;
+            if ($fileId <= 0) {
+                continue;
+            }
+            $index[$fileId] = [
+                'path' => (string) ($row['path'] ?? ''),
+                'etag' => (string) ($row['etag'] ?? ''),
+                'mtime' => isset($row['mtime']) ? (int) $row['mtime'] : 0,
+                'size' => isset($row['size']) ? (int) $row['size'] : 0,
+            ];
+        }
+        $result->closeCursor();
+
+        return $index;
+    }
+
+    /**
+     * @param list<array<string,mixed>> $entries
+     */
+    private function replaceFileIndexSnapshot(int $organizationId, int $jobId, array $entries): void
+    {
+        $delete = $this->db->getQueryBuilder();
+        $delete->delete(self::FILE_INDEX_TABLE)
+            ->where($delete->expr()->eq('organization_id', $delete->createNamedParameter($organizationId, IQueryBuilder::PARAM_INT)))
+            ->executeStatement();
+
+        $now = $this->utcNow();
+        foreach ($entries as $entry) {
+            $fileId = isset($entry['fileId']) ? (int) $entry['fileId'] : 0;
+            if ($fileId <= 0) {
+                continue;
+            }
+
+            $insert = $this->db->getQueryBuilder();
+            $insert->insert(self::FILE_INDEX_TABLE)
+                ->values([
+                    'organization_id' => $insert->createNamedParameter($organizationId, IQueryBuilder::PARAM_INT),
+                    'file_id' => $insert->createNamedParameter($fileId, IQueryBuilder::PARAM_INT),
+                    'project_id' => $insert->createNamedParameter((int) ($entry['projectId'] ?? 0), IQueryBuilder::PARAM_INT),
+                    'path' => $insert->createNamedParameter((string) ($entry['path'] ?? ''), IQueryBuilder::PARAM_STR),
+                    'etag' => $insert->createNamedParameter((string) ($entry['etag'] ?? ''), IQueryBuilder::PARAM_STR),
+                    'mtime' => $insert->createNamedParameter((int) ($entry['mtime'] ?? 0), IQueryBuilder::PARAM_INT),
+                    'size' => $insert->createNamedParameter((int) ($entry['size'] ?? 0), IQueryBuilder::PARAM_INT),
+                    'last_backup_job_id' => $insert->createNamedParameter($jobId, IQueryBuilder::PARAM_INT),
+                    'updated_at' => $insert->createNamedParameter($now, IQueryBuilder::PARAM_STR),
+                ])
+                ->executeStatement();
         }
     }
 

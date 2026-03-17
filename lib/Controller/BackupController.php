@@ -33,7 +33,7 @@ class BackupController extends OCSController
 
     #[NoAdminRequired]
     #[PasswordConfirmationRequired]
-    public function createBackupJob(int $organizationId): DataResponse
+    public function createBackupJob(int $organizationId, ?string $backupType = null): DataResponse
     {
         $this->assertCanManageOrganization($organizationId, true);
 
@@ -49,7 +49,18 @@ class BackupController extends OCSController
             'excludePrivateData' => true,
         ];
 
-        $job = $this->backupService->createJob($organizationId, $user->getUID(), $options);
+        $resolvedBackupType = strtolower(trim((string) ($backupType ?? 'full')));
+        if (!in_array($resolvedBackupType, ['full', 'incremental'], true)) {
+            throw new OCSException('Invalid backup type. Supported values: full, incremental', 400);
+        }
+
+        $job = $this->backupService->createJob(
+            $organizationId,
+            $user->getUID(),
+            $options,
+            $resolvedBackupType,
+            'manual',
+        );
 
         return new DataResponse([
             'job' => $job,

@@ -13,16 +13,25 @@
 					</p>
 				</div>
 			</div>
-			<NcButton
-				type="primary"
-				:disabled="creating"
-				@click="createJob">
-				<template #icon>
-					<NcLoadingIcon v-if="creating" :size="20" />
-					<Plus v-else :size="20" />
-				</template>
-				New Backup
-			</NcButton>
+			<div class="backup-actions">
+				<div class="backup-type-picker">
+					<label for="backup-type-select">Backup Type</label>
+					<select id="backup-type-select" v-model="selectedBackupType" :disabled="creating">
+						<option value="full">Full</option>
+						<option value="incremental">Incremental</option>
+					</select>
+				</div>
+				<NcButton
+					type="primary"
+					:disabled="creating"
+					@click="createJob">
+					<template #icon>
+						<NcLoadingIcon v-if="creating" :size="20" />
+						<Plus v-else :size="20" />
+					</template>
+					New Backup
+				</NcButton>
+			</div>
 		</div>
 
 		<!-- Loading State -->
@@ -76,6 +85,7 @@
 							<div class="job-info">
 								<div class="job-name-row">
 									<span class="job-name">Backup #{{ job.jobId }}</span>
+									<span class="type-badge">{{ formatBackupType(job.backupType) }}</span>
 									<span class="status-badge" :class="job.status">
 										{{ formatStatus(job.status) }}
 									</span>
@@ -257,6 +267,7 @@ const jobs = ref<any[]>([])
 const selectedJob = ref<any | null>(null)
 const events = ref<any[]>([])
 const deleteTarget = ref<any | null>(null)
+const selectedBackupType = ref<'full' | 'incremental'>('full')
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -279,6 +290,10 @@ function formatStatus(status: string): string {
 		failed: 'Failed',
 	}
 	return map[status] ?? status
+}
+
+function formatBackupType(type: string | null | undefined): string {
+	return type === 'incremental' ? 'Incremental' : 'Full'
 }
 
 function formatDate(raw: string | null): string {
@@ -350,7 +365,9 @@ async function createJob() {
 	creating.value = true
 	try {
 		await confirmPassword()
-		const { data } = await axios.post(jobsUrl())
+		const { data } = await axios.post(jobsUrl(), {
+			backupType: selectedBackupType.value,
+		})
 		const job = data?.ocs?.data?.job
 		await fetchJobs()
 		if (job?.jobId) {
@@ -453,6 +470,37 @@ onBeforeUnmount(() => {
 	justify-content: space-between;
 	gap: 16px;
 	flex-wrap: wrap;
+}
+
+.backup-actions {
+	display: flex;
+	align-items: flex-end;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+
+.backup-type-picker {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.backup-type-picker label {
+	font-size: 0.72rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--color-text-maxcontrast);
+}
+
+.backup-type-picker select {
+	min-width: 150px;
+	padding: 8px 30px 8px 10px;
+	border: 1px solid var(--color-border);
+	border-radius: var(--border-radius-element);
+	background: var(--color-main-background);
+	color: var(--color-main-text);
+	font-size: 0.86rem;
 }
 
 .intro-content {
@@ -637,6 +685,18 @@ onBeforeUnmount(() => {
 	text-transform: uppercase;
 	letter-spacing: 0.03em;
 	white-space: nowrap;
+}
+
+.type-badge {
+	font-size: 0.68rem;
+	font-weight: 700;
+	padding: 2px 8px;
+	border-radius: 999px;
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+	white-space: nowrap;
+	background: var(--color-background-dark);
+	color: var(--color-text-maxcontrast);
 }
 
 .status-badge.queued {

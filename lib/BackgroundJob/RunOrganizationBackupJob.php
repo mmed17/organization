@@ -20,7 +20,14 @@ class RunOrganizationBackupJob extends TimedJob
 
     protected function run($argument): void
     {
-        $this->backupService->cleanupExpired();
+        try {
+            $this->backupService->cleanupExpired();
+        } catch (\Throwable) {
+        }
+        try {
+            $this->backupService->enqueueScheduledJobs();
+        } catch (\Throwable) {
+        }
 
         for ($i = 0; $i < 2; $i++) {
             $jobId = $this->backupService->getOldestQueuedJobId();
@@ -29,11 +36,12 @@ class RunOrganizationBackupJob extends TimedJob
             }
 
             try {
+                $this->backupService->markJobPickedByWorker($jobId);
                 $this->backupService->runJob($jobId);
-            } catch (\Throwable) {
-                return;
+            } catch (\Throwable $e) {
+                $this->backupService->markJobFailedFromWorker($jobId, $e);
+                continue;
             }
         }
     }
 }
-
