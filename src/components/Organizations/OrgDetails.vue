@@ -239,6 +239,18 @@
 					</div>
 				</div>
 			</div>
+
+			<!-- Backups Section -->
+			<div v-if="canManageMembers" class="backups-section">
+				<div class="section-header-bar">
+					<div class="section-title">
+						<Download :size="24" />
+						<h3>Backups</h3>
+					</div>
+				</div>
+
+				<OrganizationBackup :organization="organization" />
+			</div>
 		</div>
 	</NcAppContentDetails>
 </template>
@@ -252,11 +264,14 @@ import {
 	NcButton,
 } from '@nextcloud/vue'
 
+import OrganizationBackup from './OrganizationBackup.vue'
+
 import AccountGroup from 'vue-material-design-icons/AccountGroup.vue'
 import Briefcase from 'vue-material-design-icons/Briefcase.vue'
 import CardAccountDetails from 'vue-material-design-icons/CardAccountDetails.vue'
 import Pencil from 'vue-material-design-icons/Pencil.vue'
 import AccountPlus from 'vue-material-design-icons/AccountPlus.vue'
+import Download from 'vue-material-design-icons/Download.vue'
 
 const props = defineProps<{
 	organization: any
@@ -559,6 +574,14 @@ const formatFileSize = (bytes: number) => {
 
 /* Members Section */
 .members-section {
+	margin-top: 24px;
+	background-color: var(--color-main-background);
+	border: 1px solid var(--color-border);
+	border-radius: var(--border-radius-large);
+	overflow: hidden;
+}
+
+.backups-section {
 	margin-top: 24px;
 	background-color: var(--color-main-background);
 	border: 1px solid var(--color-border);

@@ -142,7 +142,7 @@ This file is generated from multiple sources. Included packages:
 	- version: 4.3.2
 	- license: MIT
 - organization
-	- version: 1.0.0
+	- version: 1.1.0
 	- license: undefined
 - p-queue
 	- version: 9.1.0

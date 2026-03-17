@@ -7,6 +7,7 @@
 return [
     'routes' => [
         ['name' => 'Page#index', 'url' => '/', 'verb' => 'GET'],
+        ['name' => 'BackupDownload#download', 'url' => '/organizations/{organizationId}/backups/jobs/{jobId}/download', 'verb' => 'GET'],
     ],
     'ocs' => [
 
@@ -24,6 +25,13 @@ return [
         ['root' => '/apps/organization', 'name' => 'Organization#getHandoverJob', 'url' => '/organizations/{organizationId}/handover/jobs/{jobId}', 'verb' => 'GET'],
         ['root' => '/apps/organization', 'name' => 'Organization#retryHandoverJob', 'url' => '/organizations/{organizationId}/handover/jobs/{jobId}/retry', 'verb' => 'POST'],
         ['root' => '/apps/organization', 'name' => 'Organization#listHandoverEvents', 'url' => '/organizations/{organizationId}/handover/jobs/{jobId}/events', 'verb' => 'GET'],
+
+        // Backups
+        ['root' => '/apps/organization', 'name' => 'Backup#createBackupJob', 'url' => '/organizations/{organizationId}/backups/jobs', 'verb' => 'POST'],
+        ['root' => '/apps/organization', 'name' => 'Backup#listBackupJobs', 'url' => '/organizations/{organizationId}/backups/jobs', 'verb' => 'GET'],
+        ['root' => '/apps/organization', 'name' => 'Backup#getBackupJob', 'url' => '/organizations/{organizationId}/backups/jobs/{jobId}', 'verb' => 'GET'],
+        ['root' => '/apps/organization', 'name' => 'Backup#listBackupEvents', 'url' => '/organizations/{organizationId}/backups/jobs/{jobId}/events', 'verb' => 'GET'],
+        ['root' => '/apps/organization', 'name' => 'Backup#deleteBackupJob', 'url' => '/organizations/{organizationId}/backups/jobs/{jobId}', 'verb' => 'DELETE'],
         ['root' => '/apps/organization', 'name' => 'Organization#createOrganization', 'url' => '/organizations', 'verb' => 'POST'],
         ['root' => '/apps/organization', 'name' => 'Organization#updateSubscription', 'url' => '/organizations/{organizationId}/subscription', 'verb' => 'PUT'],
 

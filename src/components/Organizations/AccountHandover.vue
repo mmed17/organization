@@ -15,12 +15,12 @@
 							input-id="source-member"
 							:label-outside="true"
 							:aria-label-combobox="'Source member'"
-							v-model="form.sourceUserId"
-							:options="memberOptions"
-							label="label"
-							:reduce="(opt: { id: string }) => opt.id"
-							placeholder="Select source member"
-							:disabled="loading" />
+								v-model="form.sourceUserId"
+								:options="memberOptions"
+								label="label"
+								:reduce="(opt) => opt.id"
+								placeholder="Select source member"
+								:disabled="loading" />
 					</div>
 
 					<div class="form-group">
@@ -29,12 +29,12 @@
 							input-id="target-member"
 							:label-outside="true"
 							:aria-label-combobox="'Target member'"
-							v-model="form.targetUserId"
-							:options="memberOptions"
-							label="label"
-							:reduce="(opt: { id: string }) => opt.id"
-							placeholder="Select target member"
-							:disabled="loading" />
+								v-model="form.targetUserId"
+								:options="memberOptions"
+								label="label"
+								:reduce="(opt) => opt.id"
+								placeholder="Select target member"
+								:disabled="loading" />
 					</div>
 				</div>
 
