@@ -461,6 +461,9 @@ onBeforeUnmount(() => {
 	flex-direction: column;
 	gap: 16px;
 	padding: 20px;
+	--status-running-rgb: var(--color-primary-rgb, 0, 130, 201);
+	--status-success-rgb: var(--color-success-rgb, 46, 184, 92);
+	--status-error-rgb: var(--color-error-rgb, 224, 36, 36);
 }
 
 /* ─── Header / Intro ─── */
@@ -632,31 +635,36 @@ onBeforeUnmount(() => {
 	width: 36px;
 	height: 36px;
 	border-radius: 10px;
+	border: 1px solid transparent;
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	flex-shrink: 0;
-	transition: background-color 0.2s ease;
+	transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
 .status-indicator.queued {
 	background: var(--color-background-dark);
 	color: var(--color-text-maxcontrast);
+	border-color: var(--color-border);
 }
 
 .status-indicator.running {
-	background: rgba(var(--color-primary-rgb, 0, 130, 201), 0.12);
+	background: rgba(var(--status-running-rgb), 0.12);
 	color: var(--color-primary);
+	border-color: rgba(var(--status-running-rgb), 0.4);
 }
 
 .status-indicator.completed {
-	background: var(--color-success-light, rgba(46, 184, 92, 0.12));
+	background: rgba(var(--status-success-rgb), 0.12);
 	color: var(--color-success);
+	border-color: rgba(var(--status-success-rgb), 0.4);
 }
 
 .status-indicator.failed {
-	background: var(--color-error-light, rgba(224, 36, 36, 0.12));
+	background: rgba(var(--status-error-rgb), 0.12);
 	color: var(--color-error);
+	border-color: rgba(var(--status-error-rgb), 0.4);
 }
 
 .job-info {
@@ -680,11 +688,24 @@ onBeforeUnmount(() => {
 .status-badge {
 	font-size: 0.7rem;
 	font-weight: 700;
-	padding: 2px 8px;
+	padding: 2px 8px 2px 7px;
 	border-radius: 999px;
+	border: 1px solid transparent;
 	text-transform: uppercase;
 	letter-spacing: 0.03em;
 	white-space: nowrap;
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	color: var(--color-main-text);
+}
+
+.status-badge::before {
+	content: '';
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: currentColor;
 }
 
 .type-badge {
@@ -702,21 +723,37 @@ onBeforeUnmount(() => {
 .status-badge.queued {
 	background: var(--color-background-dark);
 	color: var(--color-text-maxcontrast);
+	border-color: var(--color-border);
 }
 
 .status-badge.running {
-	background: rgba(var(--color-primary-rgb, 0, 130, 201), 0.12);
-	color: var(--color-primary);
+	background: rgba(var(--status-running-rgb), 0.1);
+	color: var(--color-main-text);
+	border-color: rgba(var(--status-running-rgb), 0.35);
 }
 
 .status-badge.completed {
-	background: var(--color-success-light, rgba(46, 184, 92, 0.12));
-	color: var(--color-success);
+	background: rgba(var(--status-success-rgb), 0.1);
+	color: var(--color-main-text);
+	border-color: rgba(var(--status-success-rgb), 0.35);
 }
 
 .status-badge.failed {
-	background: var(--color-error-light, rgba(224, 36, 36, 0.12));
-	color: var(--color-error);
+	background: rgba(var(--status-error-rgb), 0.1);
+	color: var(--color-main-text);
+	border-color: rgba(var(--status-error-rgb), 0.35);
+}
+
+.status-badge.running::before {
+	background: var(--color-primary);
+}
+
+.status-badge.completed::before {
+	background: var(--color-success);
+}
+
+.status-badge.failed::before {
+	background: var(--color-error);
 }
 
 .job-timestamps {
@@ -760,11 +797,12 @@ onBeforeUnmount(() => {
 	align-items: flex-start;
 	gap: 8px;
 	padding: 10px 16px;
-	background: var(--color-error-light, rgba(224, 36, 36, 0.08));
-	color: var(--color-error);
+	background: rgba(var(--status-error-rgb), 0.08);
+	color: var(--color-main-text);
 	font-size: 0.83rem;
 	line-height: 1.4;
-	border-top: 1px solid var(--color-error-light, rgba(224, 36, 36, 0.15));
+	border-top: 1px solid rgba(var(--status-error-rgb), 0.3);
+	border-left: 3px solid var(--color-error);
 }
 
 /* ─── Progress Track (Running/Queued) ─── */
@@ -948,21 +986,25 @@ onBeforeUnmount(() => {
 	letter-spacing: 0.04em;
 	padding: 1px 6px;
 	border-radius: 4px;
+	border: 1px solid transparent;
 }
 
 .event-level-badge.info {
-	background: rgba(var(--color-primary-rgb, 0, 130, 201), 0.1);
-	color: var(--color-primary);
+	background: rgba(var(--status-running-rgb), 0.1);
+	color: var(--color-main-text);
+	border-color: rgba(var(--status-running-rgb), 0.35);
 }
 
 .event-level-badge.warning {
 	background: rgba(var(--color-warning-rgb, 232, 175, 0), 0.12);
-	color: var(--color-warning);
+	color: var(--color-main-text);
+	border-color: rgba(var(--color-warning-rgb, 232, 175, 0), 0.35);
 }
 
 .event-level-badge.error {
-	background: var(--color-error-light, rgba(224, 36, 36, 0.1));
-	color: var(--color-error);
+	background: rgba(var(--status-error-rgb), 0.1);
+	color: var(--color-main-text);
+	border-color: rgba(var(--status-error-rgb), 0.35);
 }
 
 .event-time {
