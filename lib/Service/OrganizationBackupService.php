@@ -1101,6 +1101,15 @@ class OrganizationBackupService
             if ($column === 'result_json' && is_array($value)) {
                 $value = json_encode($value, JSON_THROW_ON_ERROR);
             }
+            if ($column === 'attempt') {
+                $qb->set($column, $qb->createNamedParameter((int) $value, IQueryBuilder::PARAM_INT));
+                continue;
+            }
+            if ($column === 'retriable') {
+                $qb->set($column, $qb->createNamedParameter((int) ((bool) $value), IQueryBuilder::PARAM_INT));
+                continue;
+            }
+
             $qb->set($column, $qb->createNamedParameter($value));
         }
 
