@@ -663,15 +663,7 @@ class OrganizationBackupService
 
     public function markJobPickedByWorker(int $jobId): void
     {
-        $row = $this->getJobRowById($jobId);
-        if ($row === null) {
-            return;
-        }
-
-        $this->insertEvent($jobId, 'info', 'Backup job picked by worker', [
-            'status' => (string) ($row['status'] ?? 'unknown'),
-            'pickedAt' => $this->utcNowIso8601(),
-        ]);
+        // Intentionally no-op: worker pick-up is noisy in activity logs.
     }
 
     public function markJobFailedFromWorker(int $jobId, \Throwable $e): void
@@ -1145,7 +1137,6 @@ class OrganizationBackupService
             'finished_at' => null,
             'updated_at' => $now,
         ]);
-        $this->insertEvent($jobId, 'info', 'Step started', ['stepKey' => $stepKey], $stepKey);
     }
 
     /**
@@ -1162,7 +1153,6 @@ class OrganizationBackupService
             'finished_at' => $now,
             'updated_at' => $now,
         ]);
-        $this->insertEvent($jobId, 'info', 'Step completed', ['stepKey' => $stepKey], $stepKey);
     }
 
     /**
@@ -1258,7 +1248,7 @@ class OrganizationBackupService
         $zip = new ZipStreamer([
             'outstream' => $out,
             'zip64' => true,
-            'compress' => COMPR::DEFLATE,
+            'compress' => COMPR::STORE,
         ]);
 
         $warnings = [];
