@@ -1288,7 +1288,9 @@ class OrganizationBackupService
             $this->addJsonFile($zip, 'manifest.json', $manifest);
         } finally {
             $zip->finalize();
-            fclose($out);
+            if (is_resource($out)) {
+                fclose($out);
+            }
         }
 
         return [
@@ -1642,7 +1644,9 @@ class OrganizationBackupService
             ]);
             $counts['files']++;
         } finally {
-            fclose($stream);
+            if (is_resource($stream)) {
+                fclose($stream);
+            }
         }
     }
 
@@ -1660,7 +1664,9 @@ class OrganizationBackupService
         try {
             fwrite($fh, json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
         } finally {
-            fclose($fh);
+            if (is_resource($fh)) {
+                fclose($fh);
+            }
         }
 
         $rfh = fopen($tmpPath, 'rb');
@@ -1674,7 +1680,9 @@ class OrganizationBackupService
                 'timestamp' => time(),
             ]);
         } finally {
-            fclose($rfh);
+            if (is_resource($rfh)) {
+                fclose($rfh);
+            }
             @unlink($tmpPath);
         }
     }
@@ -1949,7 +1957,9 @@ class OrganizationBackupService
         try {
             $file->putContent($content);
         } finally {
-            fclose($content);
+            if (is_resource($content)) {
+                fclose($content);
+            }
         }
     }
 
