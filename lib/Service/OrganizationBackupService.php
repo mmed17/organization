@@ -1991,7 +1991,7 @@ class OrganizationBackupService
         return $folder;
     }
 
-    private function getOrCreateFolder(\OCP\Files\SimpleFS\ISimpleFolder $parent, string $name, bool $create): \OCP\Files\SimpleFS\ISimpleFolder
+    private function getOrCreateFolder(\OCP\Files\IAppData|\OCP\Files\SimpleFS\ISimpleFolder $parent, string $name, bool $create): \OCP\Files\SimpleFS\ISimpleFolder
     {
         try {
             return $parent->getFolder($name);
