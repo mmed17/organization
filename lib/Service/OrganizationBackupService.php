@@ -643,7 +643,27 @@ class OrganizationBackupService
         ], false);
 
         $file = $folder->getFile($artifactName);
-        return $file->fopen('rb');
+        if (method_exists($file, 'read')) {
+            $stream = $file->read();
+            if (is_resource($stream)) {
+                return $stream;
+            }
+        }
+
+        $stream = fopen('php://temp', 'w+b');
+        if ($stream === false) {
+            throw new \RuntimeException('Failed to open temporary artifact stream');
+        }
+
+        $content = $file->getContent();
+        if (fwrite($stream, $content) === false) {
+            fclose($stream);
+            throw new \RuntimeException('Failed to write artifact to temporary stream');
+        }
+
+        rewind($stream);
+
+        return $stream;
     }
 
     public function artifactExists(int $organizationId, string $artifactName): bool
