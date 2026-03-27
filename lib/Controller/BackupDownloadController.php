@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\Organization\Controller;
 
 use OCP\AppFramework\Controller;
+use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
 use OCP\AppFramework\Http\NotFoundResponse;
 use OCP\AppFramework\Http\StreamResponse;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
@@ -30,6 +31,7 @@ class BackupDownloadController extends Controller
     }
 
     #[NoAdminRequired]
+    #[NoCSRFRequired]
     #[PasswordConfirmationRequired]
     public function download(int $organizationId, int $jobId)
     {
@@ -104,4 +106,3 @@ class BackupDownloadController extends Controller
         return $expires < new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
     }
 }
-
