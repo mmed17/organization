@@ -15,8 +15,14 @@ set -euo pipefail
 
 cd "${REMOTE_APP_DIR}"
 
-echo "Pulling latest changes from ${REMOTE_BRANCH}"
-git pull origin "${REMOTE_BRANCH}"
+echo "Fetching latest changes from ${REMOTE_BRANCH}"
+git fetch origin "${REMOTE_BRANCH}"
+
+echo "Resetting working tree to origin/${REMOTE_BRANCH}"
+git reset --hard "origin/${REMOTE_BRANCH}"
+
+echo "Cleaning untracked files"
+git clean -fd -e node_modules/
 
 echo "Building frontend assets"
 npm run build
