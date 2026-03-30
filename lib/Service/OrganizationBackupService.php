@@ -29,8 +29,7 @@ class OrganizationBackupService
     private const BACKUP_TYPE_INCREMENTAL = 'incremental';
     private const TRIGGER_MANUAL = 'manual';
     private const TRIGGER_SCHEDULED = 'scheduled';
-    private const RETENTION_INCREMENTAL = 14;
-    private const RETENTION_FULL = 8;
+    private const RETENTION_JOBS = 5;
     private const SCHEDULE_DAILY_TIME = '02:00';
     private const SCHEDULE_WEEKLY_TIME = '03:00';
 
@@ -372,6 +371,7 @@ class OrganizationBackupService
             ]);
             $this->markStepCompleted($jobId, 'finalize', $result);
             $this->replaceFileIndexSnapshot($organizationId, $jobId, $fileIndexEntries);
+            $this->enforceRetentionLimit($organizationId, self::RETENTION_JOBS);
 
             $jobRow = $this->getJobRowById($jobId);
             if ($jobRow === null) {
@@ -561,21 +561,19 @@ class OrganizationBackupService
 
     private function cleanupRetentionPolicy(): void
     {
-        foreach ($this->listOrganizationsWithCompletedBackups() as $organizationId) {
-            $this->enforceRetentionForType($organizationId, self::BACKUP_TYPE_INCREMENTAL, self::RETENTION_INCREMENTAL);
-            $this->enforceRetentionForType($organizationId, self::BACKUP_TYPE_FULL, self::RETENTION_FULL);
+        foreach ($this->listOrganizationsWithBackupJobs() as $organizationId) {
+            $this->enforceRetentionLimit($organizationId, self::RETENTION_JOBS);
         }
     }
 
     /**
      * @return list<int>
      */
-    private function listOrganizationsWithCompletedBackups(): array
+    private function listOrganizationsWithBackupJobs(): array
     {
         $qb = $this->db->getQueryBuilder();
         $result = $qb->selectDistinct('organization_id')
             ->from(self::JOBS_TABLE)
-            ->where($qb->expr()->eq('status', $qb->createNamedParameter('completed')))
             ->executeQuery();
 
         $organizationIds = [];
@@ -590,7 +588,7 @@ class OrganizationBackupService
         return $organizationIds;
     }
 
-    private function enforceRetentionForType(int $organizationId, string $backupType, int $keep): void
+    private function enforceRetentionLimit(int $organizationId, int $keep): void
     {
         if ($keep < 1) {
             return;
@@ -600,38 +598,60 @@ class OrganizationBackupService
         $result = $qb->select('*')
             ->from(self::JOBS_TABLE)
             ->where($qb->expr()->eq('organization_id', $qb->createNamedParameter($organizationId, IQueryBuilder::PARAM_INT)))
-            ->andWhere($qb->expr()->eq('status', $qb->createNamedParameter('completed')))
-            ->andWhere($qb->expr()->eq('backup_type', $qb->createNamedParameter($backupType)))
+            ->andWhere($qb->expr()->notIn('status', $qb->createNamedParameter(['queued', 'running'], IQueryBuilder::PARAM_STR_ARRAY)))
             ->orderBy('finished_at', 'DESC')
             ->addOrderBy('id', 'DESC')
             ->setFirstResult($keep)
             ->executeQuery();
 
-        $now = $this->utcNow();
         while (($row = $result->fetch()) !== false) {
-            $jobId = isset($row['id']) ? (int) $row['id'] : 0;
-            if ($jobId <= 0) {
+            if (!$this->purgeJobHistory($row, $organizationId)) {
                 continue;
             }
-
-            $artifactName = isset($row['artifact_name']) ? (string) $row['artifact_name'] : '';
-            if ($artifactName !== '') {
-                $this->deleteArtifactIfExists($organizationId, $artifactName);
-            }
-
-            $this->updateJob($jobId, [
-                'status' => 'deleted',
-                'updated_at' => $now,
-                'finished_at' => $row['finished_at'] ?? $now,
-                'artifact_name' => null,
-                'artifact_size' => null,
-            ]);
-            $this->insertEvent($jobId, 'info', 'Backup removed by retention policy', [
-                'backupType' => $backupType,
-                'previousArtifactName' => $artifactName !== '' ? $artifactName : null,
-            ]);
         }
         $result->closeCursor();
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function purgeJobHistory(array $row, int $organizationId): bool
+    {
+        $jobId = isset($row['id']) ? (int) $row['id'] : 0;
+        if ($jobId <= 0) {
+            return false;
+        }
+
+        $artifactName = isset($row['artifact_name']) ? (string) $row['artifact_name'] : '';
+        if ($artifactName !== '') {
+            $this->deleteArtifactIfExists($organizationId, $artifactName);
+        }
+
+        $this->db->beginTransaction();
+
+        try {
+            $deleteEvents = $this->db->getQueryBuilder();
+            $deleteEvents->delete(self::EVENTS_TABLE)
+                ->where($deleteEvents->expr()->eq('job_id', $deleteEvents->createNamedParameter($jobId, IQueryBuilder::PARAM_INT)))
+                ->executeStatement();
+
+            $deleteSteps = $this->db->getQueryBuilder();
+            $deleteSteps->delete(self::STEPS_TABLE)
+                ->where($deleteSteps->expr()->eq('job_id', $deleteSteps->createNamedParameter($jobId, IQueryBuilder::PARAM_INT)))
+                ->executeStatement();
+
+            $deleteJob = $this->db->getQueryBuilder();
+            $deleteJob->delete(self::JOBS_TABLE)
+                ->where($deleteJob->expr()->eq('id', $deleteJob->createNamedParameter($jobId, IQueryBuilder::PARAM_INT)))
+                ->executeStatement();
+
+            $this->db->commit();
+
+            return true;
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
     }
 
     public function openArtifactStream(int $organizationId, string $artifactName)
