@@ -27,6 +27,7 @@ return [
         ['root' => '/apps/organization', 'name' => 'Organization#listHandoverEvents', 'url' => '/organizations/{organizationId}/handover/jobs/{jobId}/events', 'verb' => 'GET'],
 
         // Backups
+        ['root' => '/apps/organization', 'name' => 'Backup#listMyOrganizationBackupJobs', 'url' => '/backups/jobs/my-organization', 'verb' => 'GET'],
         ['root' => '/apps/organization', 'name' => 'Backup#createBackupJob', 'url' => '/organizations/{organizationId}/backups/jobs', 'verb' => 'POST'],
         ['root' => '/apps/organization', 'name' => 'Backup#listBackupJobs', 'url' => '/organizations/{organizationId}/backups/jobs', 'verb' => 'GET'],
         ['root' => '/apps/organization', 'name' => 'Backup#getBackupJob', 'url' => '/organizations/{organizationId}/backups/jobs/{jobId}', 'verb' => 'GET'],

@@ -68,6 +68,14 @@ class BackupController extends OCSController
     }
 
     #[NoAdminRequired]
+    public function listMyOrganizationBackupJobs(?string $status = null, int $limit = 20, int $offset = 0): DataResponse
+    {
+        $organizationId = $this->resolveCurrentUserMembershipOrganizationId(true);
+
+        return new DataResponse($this->backupService->listJobs($organizationId, $status, $limit, $offset));
+    }
+
+    #[NoAdminRequired]
     public function listBackupJobs(int $organizationId, ?string $status = null, int $limit = 20, int $offset = 0): DataResponse
     {
         $this->assertCanManageOrganization($organizationId, true);
@@ -153,5 +161,24 @@ class BackupController extends OCSController
         if ($allowedOrganizationId !== null && $allowedOrganizationId !== $organizationId) {
             throw new OCSNotFoundException('Organization does not exist');
         }
+    }
+
+    private function resolveCurrentUserMembershipOrganizationId(bool $mustBeOrgAdmin = true): int
+    {
+        $user = $this->userSession->getUser();
+        if ($user === null) {
+            throw new OCSForbiddenException('Authentication required');
+        }
+
+        $membership = $this->userMapper->getOrganizationMembership($user->getUID());
+        if ($membership === null) {
+            throw new OCSForbiddenException('You are not assigned to an organization');
+        }
+
+        if ($mustBeOrgAdmin && ($membership['role'] ?? '') !== 'admin') {
+            throw new OCSForbiddenException('Only organization admins can access this resource');
+        }
+
+        return (int) $membership['organization_id'];
     }
 }
