@@ -29,7 +29,7 @@ class OrganizationBackupService
     private const BACKUP_TYPE_INCREMENTAL = 'incremental';
     private const TRIGGER_MANUAL = 'manual';
     private const TRIGGER_SCHEDULED = 'scheduled';
-    private const RETENTION_JOBS = 5;
+    private const RETENTION_JOBS = 7;
     private const SCHEDULE_DAILY_TIME = '02:00';
     private const SCHEDULE_WEEKLY_TIME = '03:00';
 
