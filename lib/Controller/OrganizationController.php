@@ -586,6 +586,14 @@ class OrganizationController extends OCSController
             );
             $adminCreated = true;
 
+            $this->notificationService->notifyOrganizationMemberAdded(
+                $organization->getId(),
+                $organization->getName(),
+                trim($adminUserId),
+                $adminDisplayName,
+                $this->userSession->getUser()?->getUID(),
+            );
+
             $this->db->commit();
         } catch (\Exception $e) {
             $this->db->rollBack();
