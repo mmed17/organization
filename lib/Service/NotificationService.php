@@ -4,7 +4,12 @@ declare(strict_types=1);
 
 namespace OCA\Organization\Service;
 
+use OCP\Defaults;
 use OCP\IURLGenerator;
+use OCP\IUserManager;
+use OCP\L10N\IFactory;
+use OCP\Mail\Headers\AutoSubmitted;
+use OCP\Mail\IMailer;
 use OCP\Notification\IManager;
 
 use OCA\Organization\Db\UserMapper;
@@ -17,8 +22,12 @@ use Psr\Log\LoggerInterface;
 final class NotificationService
 {
     public function __construct(
+        private Defaults $defaults,
+        private IFactory $l10nFactory,
+        private IMailer $mailer,
         private IManager $notificationManager,
         private IURLGenerator $urlGenerator,
+        private IUserManager $userManager,
         private UserMapper $userMapper,
         private LoggerInterface $logger,
     ) {
@@ -96,6 +105,14 @@ final class NotificationService
                 'memberUserId' => $memberUserId,
                 'memberDisplayName' => $memberDisplayName ?? $memberUserId,
             ],
+        );
+
+        $this->sendOrganizationMemberAddedEmail(
+            $organizationId,
+            $organizationName,
+            $memberUserId,
+            $memberDisplayName,
+            $actorUid,
         );
     }
 
@@ -234,5 +251,91 @@ final class NotificationService
                 ]);
             }
         }
+    }
+
+    private function sendOrganizationMemberAddedEmail(
+        int $organizationId,
+        string $organizationName,
+        string $memberUserId,
+        ?string $memberDisplayName,
+        ?string $actorUid,
+    ): void {
+        $member = $this->userManager->get($memberUserId);
+        if ($member === null) {
+            return;
+        }
+
+        $email = $member->getEMailAddress();
+        if ($email === null || trim($email) === '') {
+            return;
+        }
+
+        $languageCode = $this->l10nFactory->getUserLanguage($member);
+        $l10n = $this->l10nFactory->get(NotificationConstants::APP_ID, $languageCode);
+        $link = $this->urlGenerator->linkToRouteAbsolute('organization.Page.index');
+
+        $emailTemplate = $this->mailer->createEMailTemplate('organization.MemberAdded', [
+            'link' => $link,
+            'organizationId' => $organizationId,
+            'organizationName' => $organizationName,
+            'memberUserId' => $memberUserId,
+        ]);
+
+        $instanceName = $this->defaults->getName();
+        $resolvedMemberDisplayName = $memberDisplayName ?? $member->getDisplayName() ?? $memberUserId;
+        $actorDisplayName = $this->resolveUserDisplayName($actorUid);
+
+        $emailTemplate->setSubject($l10n->t('You were added to %s on %s', [$organizationName, $instanceName]));
+        $emailTemplate->addHeader();
+        $emailTemplate->addHeading($l10n->t('You were added to %s', [$organizationName]));
+        $emailTemplate->addBodyText(
+            $l10n->t('Hello %s,', [$resolvedMemberDisplayName])
+        );
+        $emailTemplate->addBodyText(
+            $l10n->t('Your account has been added to the organization %s on %s.', [$organizationName, $instanceName])
+        );
+
+        if ($actorDisplayName !== null && $actorDisplayName !== '') {
+            $emailTemplate->addBodyText(
+                $l10n->t('Added by: %s', [$actorDisplayName])
+            );
+        }
+
+        $emailTemplate->addBodyButton(
+            $l10n->t('Open Organizations'),
+            $link,
+            false,
+        );
+        $emailTemplate->addFooter('', $languageCode);
+
+        try {
+            $message = $this->mailer->createMessage();
+            $message->setTo([$email => $resolvedMemberDisplayName]);
+            $message->useTemplate($emailTemplate);
+            $message->setAutoSubmitted(AutoSubmitted::VALUE_AUTO_GENERATED);
+
+            $this->mailer->send($message);
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to send organization member added email', [
+                'app' => NotificationConstants::APP_ID,
+                'orgId' => $organizationId,
+                'memberUserId' => $memberUserId,
+                'exception' => $e,
+            ]);
+        }
+    }
+
+    private function resolveUserDisplayName(?string $userId): ?string
+    {
+        if ($userId === null || trim($userId) === '') {
+            return null;
+        }
+
+        $user = $this->userManager->get($userId);
+        if ($user === null) {
+            return $userId;
+        }
+
+        return $user->getDisplayName();
     }
 }
