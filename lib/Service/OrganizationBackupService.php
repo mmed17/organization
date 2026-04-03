@@ -1545,6 +1545,44 @@ class OrganizationBackupService
     }
 
     /**
+     * ProjectCreatorAIO stores the shared project folder in two different ways:
+     * - `folder_id`: a filecache/root id for the shared group folder
+     * - `folder_path`: the mount name as resolved from a user's files view
+     *
+     * The `folder_id` lookup is not reliable on every instance for group folders,
+     * so we fall back to resolving the shared folder through the project owner.
+     *
+     * @param array<string,mixed> $project
+     */
+    private function resolveProjectSharedFolder(array $project): ?\OCP\Files\Folder
+    {
+        $folderId = isset($project['folder_id']) ? (int) $project['folder_id'] : 0;
+        if ($folderId > 0) {
+            $folder = $this->resolveFolderById($folderId);
+            if ($folder !== null) {
+                return $folder;
+            }
+        }
+
+        $ownerId = trim((string) ($project['owner_id'] ?? ''));
+        $folderPath = trim((string) ($project['folder_path'] ?? ''));
+        if ($ownerId === '' || $folderPath === '') {
+            return null;
+        }
+
+        try {
+            $userFolder = $this->rootFolder->getUserFolder($ownerId);
+            $node = $userFolder->get($folderPath);
+            if ($node instanceof \OCP\Files\Folder) {
+                return $node;
+            }
+        } catch (\Throwable) {
+        }
+
+        return null;
+    }
+
+    /**
      * @param list<string> $warnings
      * @return array{entries:list<array<string,mixed>>,indexEntries:list<array<string,mixed>>,scanFailed:bool}
      */
@@ -1565,12 +1603,12 @@ class OrganizationBackupService
             $projectId = isset($project['id']) ? (int) $project['id'] : 0;
             $folderId = isset($project['folder_id']) ? (int) $project['folder_id'] : 0;
             $projectName = isset($project['name']) ? (string) $project['name'] : '';
-            if ($projectId <= 0 || $folderId <= 0) {
+            if ($projectId <= 0) {
                 continue;
             }
 
             try {
-                $folder = $this->resolveFolderById($folderId);
+                $folder = $this->resolveProjectSharedFolder($project);
                 if ($folder === null) {
                     $warnings[] = sprintf('Project %d shared folder not found (folder_id=%d)', $projectId, $folderId);
                     continue;
