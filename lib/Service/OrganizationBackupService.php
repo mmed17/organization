@@ -19,6 +19,7 @@ use Psr\Log\LoggerInterface;
 
 class OrganizationBackupService
 {
+    private const BACKUP_FORMAT_VERSION = 2;
     private const JOBS_TABLE = 'org_backup_jobs';
     private const STEPS_TABLE = 'org_backup_steps';
     private const EVENTS_TABLE = 'org_backup_events';
@@ -313,7 +314,7 @@ class OrganizationBackupService
 
             $this->markStepRunning($jobId, 'collect_db');
             $summary = [
-                'formatVersion' => 1,
+                'formatVersion' => self::BACKUP_FORMAT_VERSION,
                 'generatedAt' => $this->utcNowIso8601(),
                 'organizationId' => $organizationId,
                 'requestedByUid' => $requestedByUid,
@@ -1305,18 +1306,32 @@ class OrganizationBackupService
         $deletedFiles = [];
 
         try {
-            $this->addDbSection($zip, $organizationId, $counts, $warnings);
-            $this->addProjectCreatorSection($zip, $organizationId, $counts, $warnings);
-            $this->addDeckSection($zip, $organizationId, $counts, $warnings);
-            $this->addFilesSection($zip, $organizationId, $jobId, $backupType, $counts, $warnings, $fileIndexEntries, $deletedFiles);
+            $dbExport = $this->addDbSection($zip, $organizationId, $counts, $warnings);
+            $projectExport = $this->addProjectCreatorSection($zip, $organizationId, $counts, $warnings);
+            $deckExport = $this->addDeckSection($zip, $organizationId, $counts, $warnings);
+            $filesExport = $this->addFilesSection($zip, $organizationId, $jobId, $backupType, $counts, $warnings, $fileIndexEntries, $deletedFiles);
+            $companionFiles = $this->addReadableCompanionFiles(
+                $zip,
+                $artifactName,
+                $backupType,
+                $preSummary,
+                $counts,
+                $warnings,
+                $dbExport,
+                $projectExport,
+                $deckExport,
+                $filesExport,
+                $deletedFiles,
+            );
 
             $manifest = [
-                'formatVersion' => 1,
+                'formatVersion' => self::BACKUP_FORMAT_VERSION,
                 'generatedAt' => $this->utcNowIso8601(),
                 'organizationId' => $organizationId,
                 'artifactName' => $artifactName,
                 'summary' => $preSummary,
                 'counts' => $counts,
+                'companionFormats' => $companionFiles,
             ];
             if ($warnings !== []) {
                 $manifest['warnings'] = $warnings;
@@ -1345,7 +1360,7 @@ class OrganizationBackupService
      * @param array<string,int> $counts
      * @param list<string> $warnings
      */
-    private function addDbSection(ZipStreamer $zip, int $organizationId, array &$counts, array &$warnings): void
+    private function addDbSection(ZipStreamer $zip, int $organizationId, array &$counts, array &$warnings): array
     {
         $orgRow = $this->fetchOneById('organizations', $organizationId);
         if ($orgRow === null) {
@@ -1368,20 +1383,36 @@ class OrganizationBackupService
         $planIds = array_values(array_unique(array_filter(array_map(static fn (array $row): int => isset($row['plan_id']) ? (int) $row['plan_id'] : 0, $subscriptions), static fn (int $id): bool => $id > 0)));
         $plans = $planIds === [] ? [] : $this->fetchAllWhereInInt('plans', 'id', $planIds);
         $this->addJsonFile($zip, 'db/plans.json', $plans);
+
+        return [
+            'organization' => $orgRow,
+            'members' => $members,
+            'subscriptions' => $subscriptions,
+            'subscriptionHistory' => $subscriptionHistory,
+            'plans' => $plans,
+        ];
     }
 
     /**
      * @param array<string,int> $counts
      * @param list<string> $warnings
      */
-    private function addProjectCreatorSection(ZipStreamer $zip, int $organizationId, array &$counts, array &$warnings): void
+    private function addProjectCreatorSection(ZipStreamer $zip, int $organizationId, array &$counts, array &$warnings): array
     {
         try {
             $projects = $this->findProjectRowsForOrganization($organizationId);
         } catch (\Throwable $e) {
             $warnings[] = 'ProjectCreatorAIO tables unavailable; project export skipped';
             $this->logger->debug('ProjectCreator export skipped', ['exception' => $e]);
-            return;
+            return [
+                'projects' => [],
+                'timeline' => [],
+                'notes' => [],
+                'activity' => [],
+                'doneSync' => [],
+                'fileProcessing' => [],
+                'ocrDocTypes' => [],
+            ];
         }
 
         $counts['projects'] = count($projects);
@@ -1395,7 +1426,15 @@ class OrganizationBackupService
             $this->addJsonFile($zip, 'db/projectcreator/project_deck_done_sync.json', []);
             $this->addJsonFile($zip, 'db/projectcreator/project_file_processing.json', []);
             $this->addJsonFile($zip, 'db/projectcreator/project_ocr_doc_types.json', []);
-            return;
+            return [
+                'projects' => $projects,
+                'timeline' => [],
+                'notes' => [],
+                'activity' => [],
+                'doneSync' => [],
+                'fileProcessing' => [],
+                'ocrDocTypes' => [],
+            ];
         }
 
         $timeline = $this->fetchAllWhereInInt('project_timeline_items', 'project_id', $projectIds);
@@ -1415,27 +1454,42 @@ class OrganizationBackupService
 
         $ocrDocTypes = $this->fetchAllWhereInt('project_ocr_doc_types', 'organization_id', $organizationId);
         $this->addJsonFile($zip, 'db/projectcreator/project_ocr_doc_types.json', $ocrDocTypes);
+
+        return [
+            'projects' => $projects,
+            'timeline' => $timeline,
+            'notes' => $notes,
+            'activity' => $activity,
+            'doneSync' => $doneSync,
+            'fileProcessing' => $fileProcessing,
+            'ocrDocTypes' => $ocrDocTypes,
+        ];
     }
 
     /**
      * @param array<string,int> $counts
      * @param list<string> $warnings
      */
-    private function addDeckSection(ZipStreamer $zip, int $organizationId, array &$counts, array &$warnings): void
+    private function addDeckSection(ZipStreamer $zip, int $organizationId, array &$counts, array &$warnings): array
     {
         $boardIds = [];
+        $boardExports = [];
         try {
             $boardIds = $this->findDeckBoardIdsForOrganization($organizationId);
         } catch (\Throwable $e) {
             $warnings[] = 'Deck tables unavailable; deck export skipped';
             $this->logger->debug('Deck export skipped', ['exception' => $e]);
-            return;
+            return [
+                'boardIds' => [],
+                'boardExports' => [],
+            ];
         }
 
         $counts['deckBoards'] = count($boardIds);
         foreach ($boardIds as $boardId) {
             try {
                 $bundle = $this->exportDeckBoardBundle($boardId);
+                $boardExports[] = $bundle;
                 $this->addJsonFile($zip, sprintf('deck/boards/%d.json', $boardId), $bundle);
             } catch (\Throwable $e) {
                 $warnings[] = sprintf('Failed to export deck board %d', $boardId);
@@ -1446,6 +1500,11 @@ class OrganizationBackupService
                 ]);
             }
         }
+
+        return [
+            'boardIds' => $boardIds,
+            'boardExports' => $boardExports,
+        ];
     }
 
     /**
@@ -1463,19 +1522,22 @@ class OrganizationBackupService
         array &$warnings,
         array &$fileIndexEntries,
         array &$deletedFiles,
-    ): void {
+    ): array {
         $scanResult = $this->scanOrganizationFiles($organizationId, $warnings);
         if (($scanResult['scanFailed'] ?? false) === true) {
             throw new \RuntimeException('Shared files scan failed');
         }
         $currentEntries = $scanResult['entries'];
         $fileIndexEntries = $scanResult['indexEntries'];
+        $fileInventory = $this->buildFileInventoryRows($currentEntries);
 
         if ($backupType === self::BACKUP_TYPE_FULL) {
             foreach ($currentEntries as $entry) {
                 $this->addFileEntryToZip($zip, $entry, $counts);
             }
-            return;
+            return [
+                'fileInventory' => $fileInventory,
+            ];
         }
 
         $previousIndex = $this->getFileIndexSnapshotByOrganization($organizationId);
@@ -1521,6 +1583,10 @@ class OrganizationBackupService
             'organizationId' => $organizationId,
             'deletedFiles' => $deletedFiles,
         ]);
+
+        return [
+            'fileInventory' => $fileInventory,
+        ];
     }
 
     private function sanitizeZipPathSegment(string $value): string
@@ -1740,7 +1806,7 @@ class OrganizationBackupService
         }
 
         try {
-            fwrite($fh, json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
+            fwrite($fh, $this->encodeJsonForExport($data));
         } finally {
             if (is_resource($fh)) {
                 fclose($fh);
@@ -1763,6 +1829,398 @@ class OrganizationBackupService
             }
             @unlink($tmpPath);
         }
+    }
+
+    /**
+     * @param array<string,mixed> $preSummary
+     * @param array<string,int> $counts
+     * @param list<string> $warnings
+     * @param array<string,mixed> $dbExport
+     * @param array<string,mixed> $projectExport
+     * @param array<string,mixed> $deckExport
+     * @param array<string,mixed> $filesExport
+     * @param list<array<string,mixed>> $deletedFiles
+     * @return array<string,mixed>
+     */
+    private function addReadableCompanionFiles(
+        ZipStreamer $zip,
+        string $artifactName,
+        string $backupType,
+        array $preSummary,
+        array $counts,
+        array $warnings,
+        array $dbExport,
+        array $projectExport,
+        array $deckExport,
+        array $filesExport,
+        array $deletedFiles,
+    ): array {
+        $csvFiles = [
+            'db/organization.csv',
+            'db/organization_members.csv',
+            'db/subscriptions.csv',
+            'db/subscriptions_history.csv',
+            'db/plans.csv',
+            'db/projectcreator/custom_projects.csv',
+            'changes/deleted_files.csv',
+            'files/file_inventory.csv',
+        ];
+        $markdownFiles = [
+            'README.md',
+            'summary/overview.md',
+        ];
+
+        $this->addMarkdownFile($zip, 'README.md', $this->buildArchiveReadmeMarkdown($artifactName, $backupType));
+        $this->addMarkdownFile(
+            $zip,
+            'summary/overview.md',
+            $this->buildOverviewMarkdown($artifactName, $backupType, $preSummary, $counts, $warnings, $dbExport, $projectExport, $deckExport, $filesExport, $deletedFiles),
+        );
+
+        $organizationRow = is_array($dbExport['organization'] ?? null) ? [$dbExport['organization']] : [];
+        $this->addCsvFile($zip, 'db/organization.csv', $organizationRow, $this->buildCsvHeaders($organizationRow));
+        $this->addCsvFile($zip, 'db/organization_members.csv', is_array($dbExport['members'] ?? null) ? $dbExport['members'] : [], $this->buildCsvHeaders(is_array($dbExport['members'] ?? null) ? $dbExport['members'] : []));
+        $this->addCsvFile($zip, 'db/subscriptions.csv', is_array($dbExport['subscriptions'] ?? null) ? $dbExport['subscriptions'] : [], $this->buildCsvHeaders(is_array($dbExport['subscriptions'] ?? null) ? $dbExport['subscriptions'] : []));
+        $this->addCsvFile($zip, 'db/subscriptions_history.csv', is_array($dbExport['subscriptionHistory'] ?? null) ? $dbExport['subscriptionHistory'] : [], $this->buildCsvHeaders(is_array($dbExport['subscriptionHistory'] ?? null) ? $dbExport['subscriptionHistory'] : []));
+        $this->addCsvFile($zip, 'db/plans.csv', is_array($dbExport['plans'] ?? null) ? $dbExport['plans'] : [], $this->buildCsvHeaders(is_array($dbExport['plans'] ?? null) ? $dbExport['plans'] : []));
+        $this->addCsvFile($zip, 'db/projectcreator/custom_projects.csv', is_array($projectExport['projects'] ?? null) ? $projectExport['projects'] : [], $this->buildCsvHeaders(is_array($projectExport['projects'] ?? null) ? $projectExport['projects'] : []));
+        $this->addCsvFile($zip, 'changes/deleted_files.csv', $deletedFiles, ['fileId', 'path', 'size', 'mtime', 'etag', 'jobId']);
+        $this->addCsvFile(
+            $zip,
+            'files/file_inventory.csv',
+            is_array($filesExport['fileInventory'] ?? null) ? $filesExport['fileInventory'] : [],
+            ['fileId', 'projectId', 'path', 'size', 'mtime', 'etag'],
+        );
+
+        return [
+            'json' => [
+                'canonical' => true,
+                'style' => 'pretty',
+            ],
+            'markdown' => $markdownFiles,
+            'csv' => $csvFiles,
+        ];
+    }
+
+    /**
+     * @param mixed $data
+     */
+    private function encodeJsonForExport($data): string
+    {
+        return json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) . "\n";
+    }
+
+    private function addMarkdownFile(ZipStreamer $zip, string $zipPath, string $content): void
+    {
+        $this->addTextFile($zip, $zipPath, $content);
+    }
+
+    /**
+     * @param list<array<string,mixed>> $rows
+     * @param list<string> $headers
+     */
+    private function addCsvFile(ZipStreamer $zip, string $zipPath, array $rows, array $headers): void
+    {
+        $this->addTextFile($zip, $zipPath, $this->buildCsvString($rows, $headers));
+    }
+
+    private function addTextFile(ZipStreamer $zip, string $zipPath, string $content): void
+    {
+        $tmpPath = $this->createTempFilePath('.txt');
+        $fh = fopen($tmpPath, 'wb');
+        if ($fh === false) {
+            throw new \RuntimeException('Failed to open temporary text file');
+        }
+
+        try {
+            fwrite($fh, $content);
+        } finally {
+            if (is_resource($fh)) {
+                fclose($fh);
+            }
+        }
+
+        $rfh = fopen($tmpPath, 'rb');
+        if ($rfh === false) {
+            @unlink($tmpPath);
+            throw new \RuntimeException('Failed to open temporary text for reading');
+        }
+
+        try {
+            $zip->addFileFromStream($rfh, $zipPath, [
+                'timestamp' => time(),
+            ]);
+        } finally {
+            if (is_resource($rfh)) {
+                fclose($rfh);
+            }
+            @unlink($tmpPath);
+        }
+    }
+
+    /**
+     * @param list<array<string,mixed>> $rows
+     * @return list<string>
+     */
+    private function buildCsvHeaders(array $rows): array
+    {
+        $headers = [];
+        foreach ($rows as $row) {
+            foreach ($row as $key => $value) {
+                if (is_string($key) && !in_array($key, $headers, true)) {
+                    $headers[] = $key;
+                }
+            }
+        }
+
+        return $headers;
+    }
+
+    /**
+     * @param list<array<string,mixed>> $rows
+     * @param list<string> $headers
+     */
+    private function buildCsvString(array $rows, array $headers): string
+    {
+        $stream = fopen('php://temp', 'w+b');
+        if ($stream === false) {
+            throw new \RuntimeException('Failed to open temporary CSV stream');
+        }
+
+        try {
+            if ($headers !== []) {
+                fputcsv($stream, $headers);
+            }
+
+            foreach ($rows as $row) {
+                $line = [];
+                foreach ($headers as $header) {
+                    $line[] = $this->stringifyCsvValue($row[$header] ?? null);
+                }
+                fputcsv($stream, $line);
+            }
+
+            rewind($stream);
+            $content = stream_get_contents($stream);
+            if ($content === false) {
+                throw new \RuntimeException('Failed to read generated CSV');
+            }
+
+            return $content;
+        } finally {
+            fclose($stream);
+        }
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private function stringifyCsvValue($value): string
+    {
+        if ($value === null) {
+            return '';
+        }
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+        if (is_scalar($value)) {
+            return (string) $value;
+        }
+
+        return json_encode($value, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+    }
+
+    private function buildArchiveReadmeMarkdown(string $artifactName, string $backupType): string
+    {
+        return implode("\n", [
+            '# Organization Backup Archive',
+            '',
+            sprintf('- Artifact: `%s`', $artifactName),
+            sprintf('- Backup type: `%s`', $backupType),
+            '- Canonical structured export: pretty-printed JSON files',
+            '- Human-readable companions: `summary/overview.md` and CSV files for flat datasets',
+            '- Binary shared project files remain under `files/projects/...`',
+            '',
+            '## Archive layout',
+            '',
+            '- `manifest.json`: machine-readable archive metadata',
+            '- `summary/overview.md`: manager-friendly snapshot of the backup',
+            '- `db/**/*.json`: canonical structured exports',
+            '- `db/**/*.csv`: spreadsheet-friendly exports for flat tables',
+            '- `deck/boards/*.json`: nested deck board bundles',
+            '- `files/file_inventory.csv`: readable inventory of scanned shared files',
+            '- `changes/deleted_files.*`: incremental deletion reporting',
+            '',
+        ]);
+    }
+
+    /**
+     * @param array<string,mixed> $preSummary
+     * @param array<string,int> $counts
+     * @param list<string> $warnings
+     * @param array<string,mixed> $dbExport
+     * @param array<string,mixed> $projectExport
+     * @param array<string,mixed> $deckExport
+     * @param array<string,mixed> $filesExport
+     * @param list<array<string,mixed>> $deletedFiles
+     */
+    private function buildOverviewMarkdown(
+        string $artifactName,
+        string $backupType,
+        array $preSummary,
+        array $counts,
+        array $warnings,
+        array $dbExport,
+        array $projectExport,
+        array $deckExport,
+        array $filesExport,
+        array $deletedFiles,
+    ): string {
+        $organization = is_array($dbExport['organization'] ?? null) ? $dbExport['organization'] : [];
+        $subscriptions = is_array($dbExport['subscriptions'] ?? null) ? $dbExport['subscriptions'] : [];
+        $plans = is_array($dbExport['plans'] ?? null) ? $dbExport['plans'] : [];
+        $projects = is_array($projectExport['projects'] ?? null) ? $projectExport['projects'] : [];
+        $fileInventory = is_array($filesExport['fileInventory'] ?? null) ? $filesExport['fileInventory'] : [];
+        $deckBoards = is_array($deckExport['boardIds'] ?? null) ? $deckExport['boardIds'] : [];
+
+        $subscription = isset($subscriptions[0]) && is_array($subscriptions[0]) ? $subscriptions[0] : [];
+        $plan = isset($plans[0]) && is_array($plans[0]) ? $plans[0] : [];
+        $organizationName = (string) ($organization['name'] ?? ('Organization #' . (string) ($preSummary['organizationId'] ?? '')));
+
+        $lines = [
+            '# Backup Overview',
+            '',
+            sprintf('- Artifact: `%s`', $artifactName),
+            sprintf('- Organization: `%s`', $organizationName),
+            sprintf('- Backup type: `%s`', $backupType),
+            sprintf('- Generated at: `%s`', (string) ($preSummary['generatedAt'] ?? '')),
+            sprintf('- Requested by: `%s`', (string) ($preSummary['requestedByUid'] ?? '')),
+            '',
+            '## Counts',
+            '',
+            sprintf('- Members: %d', (int) ($counts['members'] ?? 0)),
+            sprintf('- Subscriptions: %d', (int) ($counts['subscriptions'] ?? 0)),
+            sprintf('- Projects: %d', (int) ($counts['projects'] ?? 0)),
+            sprintf('- Deck boards: %d', (int) ($counts['deckBoards'] ?? 0)),
+            sprintf('- Files in archive scope: %d', count($fileInventory)),
+            sprintf('- Deleted files tracked: %d', count($deletedFiles)),
+            '',
+            '## Subscription',
+            '',
+            sprintf('- Status: `%s`', (string) ($subscription['status'] ?? 'n/a')),
+            sprintf('- Plan: `%s`', (string) ($plan['name'] ?? ($subscription['plan_id'] ?? 'n/a'))),
+            sprintf('- Ends at: `%s`', (string) ($subscription['ended_at'] ?? 'n/a')),
+            '',
+            '## Projects',
+            '',
+        ];
+
+        if ($projects === []) {
+            $lines[] = '- No projects exported.';
+        } else {
+            foreach (array_slice($projects, 0, 10) as $project) {
+                if (!is_array($project)) {
+                    continue;
+                }
+                $lines[] = sprintf(
+                    '- `%s` (id: %s, owner: %s, board: %s)',
+                    (string) ($project['name'] ?? 'Unnamed project'),
+                    (string) ($project['id'] ?? 'n/a'),
+                    (string) ($project['owner_id'] ?? 'n/a'),
+                    (string) ($project['board_id'] ?? 'n/a'),
+                );
+            }
+            if (count($projects) > 10) {
+                $lines[] = sprintf('- ...and %d more projects in `db/projectcreator/custom_projects.csv`.', count($projects) - 10);
+            }
+        }
+
+        $lines[] = '';
+        $lines[] = '## Deck';
+        $lines[] = '';
+        if ($deckBoards === []) {
+            $lines[] = '- No deck boards exported.';
+        } else {
+            $lines[] = sprintf('- Exported board IDs: %s', implode(', ', array_map(static fn ($id): string => (string) $id, array_slice($deckBoards, 0, 10))));
+            if (count($deckBoards) > 10) {
+                $lines[] = sprintf('- ...and %d more boards in `deck/boards/`.', count($deckBoards) - 10);
+            }
+        }
+
+        $lines[] = '';
+        $lines[] = '## Files';
+        $lines[] = '';
+        if ($fileInventory === []) {
+            $lines[] = '- No shared files exported.';
+        } else {
+            foreach (array_slice($fileInventory, 0, 10) as $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+                $lines[] = sprintf(
+                    '- `%s` (%s bytes, project %s)',
+                    (string) ($entry['path'] ?? 'unknown'),
+                    (string) ($entry['size'] ?? '0'),
+                    (string) ($entry['projectId'] ?? 'n/a'),
+                );
+            }
+            if (count($fileInventory) > 10) {
+                $lines[] = sprintf('- ...and %d more files in `files/file_inventory.csv`.', count($fileInventory) - 10);
+            }
+        }
+
+        $lines[] = '';
+        $lines[] = '## Warnings';
+        $lines[] = '';
+        if ($warnings === []) {
+            $lines[] = '- None.';
+        } else {
+            foreach ($warnings as $warning) {
+                $lines[] = sprintf('- %s', $warning);
+            }
+        }
+
+        $lines[] = '';
+        $lines[] = '## Deleted Files';
+        $lines[] = '';
+        if ($deletedFiles === []) {
+            $lines[] = '- None.';
+        } else {
+            foreach (array_slice($deletedFiles, 0, 10) as $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+                $lines[] = sprintf('- `%s` (fileId: %s)', (string) ($entry['path'] ?? 'unknown'), (string) ($entry['fileId'] ?? 'n/a'));
+            }
+            if (count($deletedFiles) > 10) {
+                $lines[] = sprintf('- ...and %d more deleted files in `changes/deleted_files.csv`.', count($deletedFiles) - 10);
+            }
+        }
+
+        $lines[] = '';
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * @param list<array<string,mixed>> $entries
+     * @return list<array<string,mixed>>
+     */
+    private function buildFileInventoryRows(array $entries): array
+    {
+        $rows = [];
+        foreach ($entries as $entry) {
+            $rows[] = [
+                'fileId' => (int) ($entry['fileId'] ?? 0),
+                'projectId' => (int) ($entry['projectId'] ?? 0),
+                'path' => (string) ($entry['path'] ?? ''),
+                'size' => (int) ($entry['size'] ?? 0),
+                'mtime' => (int) ($entry['mtime'] ?? 0),
+                'etag' => (string) ($entry['etag'] ?? ''),
+            ];
+        }
+
+        return $rows;
     }
 
     /**

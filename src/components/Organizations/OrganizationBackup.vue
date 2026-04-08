@@ -9,7 +9,8 @@
 				<div class="intro-text">
 					<h3 class="intro-title">Organization Backup</h3>
 					<p class="intro-desc">
-						Export shared project files as a ZIP archive. Backups expire automatically after 24 hours.
+						Export shared project files as a ZIP archive with readable summaries, spreadsheet-friendly tables,
+						and JSON data. Backups expire automatically after 24 hours.
 					</p>
 				</div>
 			</div>
@@ -48,7 +49,7 @@
 			<h4 class="empty-title">No backups yet</h4>
 			<p class="empty-desc">
 				Create your first backup to export all shared project files.
-				Backups include all file metadata and folder structure.
+				Backups include readable overviews, CSV tables, JSON metadata, and the full folder structure.
 			</p>
 			<NcButton
 				type="primary"
