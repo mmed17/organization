@@ -443,8 +443,12 @@ async function createJob() {
 	creating.value = true
 	try {
 		await confirmPassword()
-		const { data } = await axios.post(jobsUrl(), {
-			backupType: selectedBackupType.value,
+		const body = new URLSearchParams()
+		body.set('backupType', selectedBackupType.value)
+		const { data } = await axios.post(jobsUrl(), body, {
+			headers: {
+				'Content-Type': 'application/x-www-form-urlencoded',
+			},
 		})
 		const job = data?.ocs?.data?.job
 		await fetchJobs()
@@ -462,9 +466,13 @@ async function createRollbackJob(sourceBackupJobId: number, mode: 'dry_run' | 'a
 	creatingRollback.value = true
 	try {
 		await confirmPassword()
-		await axios.post(rollbackJobsUrl(), {
-			sourceBackupJobId,
-			mode,
+		const body = new URLSearchParams()
+		body.set('sourceBackupJobId', String(sourceBackupJobId))
+		body.set('mode', mode)
+		await axios.post(rollbackJobsUrl(), body, {
+			headers: {
+				'Content-Type': 'application/x-www-form-urlencoded',
+			},
 		})
 		await fetchRollbackJobs()
 	} finally {

@@ -132,7 +132,7 @@ class BackupController extends OCSController
 
     #[NoAdminRequired]
     #[PasswordConfirmationRequired]
-    public function createRollbackJob(int $organizationId, int $sourceBackupJobId, ?string $mode = null): DataResponse
+    public function createRollbackJob(int $organizationId, ?int $sourceBackupJobId = null, ?string $mode = null): DataResponse
     {
         $this->assertCanManageOrganization($organizationId, true);
 
@@ -141,7 +141,41 @@ class BackupController extends OCSController
             throw new OCSForbiddenException('Authentication required');
         }
 
-        $resolvedMode = strtolower(trim((string) ($mode ?? 'dry_run')));
+        $decodedBody = null;
+        $rawBody = trim((string) $this->request->getContent());
+        if ($rawBody !== '') {
+            try {
+                $candidate = json_decode($rawBody, true, 512, JSON_THROW_ON_ERROR);
+                if (is_array($candidate)) {
+                    $decodedBody = $candidate;
+                }
+            } catch (\JsonException) {
+                $decodedBody = null;
+            }
+        }
+
+        $resolvedSourceBackupJobId = $sourceBackupJobId;
+        if ($resolvedSourceBackupJobId === null || $resolvedSourceBackupJobId <= 0) {
+            $param = $this->request->getParam('sourceBackupJobId', null);
+            if ($param === null) {
+                $param = $this->request->getParam('source_backup_job_id', null);
+            }
+            if (($param === null || $param === '') && is_array($decodedBody)) {
+                $param = $decodedBody['sourceBackupJobId'] ?? $decodedBody['source_backup_job_id'] ?? null;
+            }
+            if ($param !== null && $param !== '') {
+                $resolvedSourceBackupJobId = (int) $param;
+            }
+        }
+        if ($resolvedSourceBackupJobId === null || $resolvedSourceBackupJobId <= 0) {
+            throw new OCSException('Missing required source backup job id', 400);
+        }
+
+        $modeFromRequest = $this->request->getParam('mode', null);
+        if (($modeFromRequest === null || $modeFromRequest === '') && is_array($decodedBody)) {
+            $modeFromRequest = (string) ($decodedBody['mode'] ?? '');
+        }
+        $resolvedMode = strtolower(trim((string) ($mode ?? $modeFromRequest ?? 'dry_run')));
         if (!in_array($resolvedMode, ['dry_run', 'apply'], true)) {
             throw new OCSException('Invalid rollback mode. Supported values: dry_run, apply', 400);
         }
@@ -149,7 +183,7 @@ class BackupController extends OCSController
         try {
             $job = $this->rollbackService->createJob(
                 $organizationId,
-                $sourceBackupJobId,
+                $resolvedSourceBackupJobId,
                 $user->getUID(),
                 $resolvedMode,
             );
