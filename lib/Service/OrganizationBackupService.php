@@ -36,6 +36,17 @@ class OrganizationBackupService
 
     /** @var list<string> */
     private const STEP_ORDER = ['collect_db', 'export_deck', 'export_files', 'finalize'];
+    /** @var list<string> */
+    private const DECK_COMPANION_CSV_FILES = [
+        'deck/boards.csv',
+        'deck/stacks.csv',
+        'deck/cards.csv',
+        'deck/labels.csv',
+        'deck/board_acl.csv',
+        'deck/assigned_users.csv',
+        'deck/assigned_labels.csv',
+        'deck/attachments.csv',
+    ];
 
     public function __construct(
         private IDBConnection $db,
@@ -1407,7 +1418,8 @@ class OrganizationBackupService
             return [
                 'projects' => [],
                 'timeline' => [],
-                'notes' => [],
+                'notesPublic' => [],
+                'notesPrivate' => [],
                 'activity' => [],
                 'doneSync' => [],
                 'fileProcessing' => [],
@@ -1422,6 +1434,7 @@ class OrganizationBackupService
         if ($projectIds === []) {
             $this->addJsonFile($zip, 'db/projectcreator/project_timeline_items.json', []);
             $this->addJsonFile($zip, 'db/projectcreator/project_notes_public.json', []);
+            $this->addJsonFile($zip, 'db/projectcreator/project_notes_private.json', []);
             $this->addJsonFile($zip, 'db/projectcreator/project_activity_events.json', []);
             $this->addJsonFile($zip, 'db/projectcreator/project_deck_done_sync.json', []);
             $this->addJsonFile($zip, 'db/projectcreator/project_file_processing.json', []);
@@ -1429,7 +1442,8 @@ class OrganizationBackupService
             return [
                 'projects' => $projects,
                 'timeline' => [],
-                'notes' => [],
+                'notesPublic' => [],
+                'notesPrivate' => [],
                 'activity' => [],
                 'doneSync' => [],
                 'fileProcessing' => [],
@@ -1440,8 +1454,10 @@ class OrganizationBackupService
         $timeline = $this->fetchAllWhereInInt('project_timeline_items', 'project_id', $projectIds);
         $this->addJsonFile($zip, 'db/projectcreator/project_timeline_items.json', $timeline);
 
-        $notes = $this->fetchAllPublicProjectNotes($projectIds);
-        $this->addJsonFile($zip, 'db/projectcreator/project_notes_public.json', $notes);
+        $notesPublic = $this->fetchAllProjectNotesByVisibility($projectIds, 'public');
+        $this->addJsonFile($zip, 'db/projectcreator/project_notes_public.json', $notesPublic);
+        $notesPrivate = $this->fetchAllProjectNotesByVisibility($projectIds, 'private');
+        $this->addJsonFile($zip, 'db/projectcreator/project_notes_private.json', $notesPrivate);
 
         $activity = $this->fetchAllWhereInInt('project_activity_events', 'project_id', $projectIds);
         $this->addJsonFile($zip, 'db/projectcreator/project_activity_events.json', $activity);
@@ -1458,7 +1474,8 @@ class OrganizationBackupService
         return [
             'projects' => $projects,
             'timeline' => $timeline,
-            'notes' => $notes,
+            'notesPublic' => $notesPublic,
+            'notesPrivate' => $notesPrivate,
             'activity' => $activity,
             'doneSync' => $doneSync,
             'fileProcessing' => $fileProcessing,
@@ -1855,6 +1872,7 @@ class OrganizationBackupService
         array $filesExport,
         array $deletedFiles,
     ): array {
+        $deckCsvPayload = $this->buildDeckCompanionCsvPayload($deckExport);
         $csvFiles = [
             'db/organization.csv',
             'db/organization_members.csv',
@@ -1862,8 +1880,11 @@ class OrganizationBackupService
             'db/subscriptions_history.csv',
             'db/plans.csv',
             'db/projectcreator/custom_projects.csv',
+            'db/projectcreator/project_notes_public.csv',
+            'db/projectcreator/project_notes_private.csv',
             'changes/deleted_files.csv',
             'files/file_inventory.csv',
+            ...array_keys($deckCsvPayload),
         ];
         $markdownFiles = [
             'README.md',
@@ -1884,6 +1905,8 @@ class OrganizationBackupService
         $this->addCsvFile($zip, 'db/subscriptions_history.csv', is_array($dbExport['subscriptionHistory'] ?? null) ? $dbExport['subscriptionHistory'] : [], $this->buildCsvHeaders(is_array($dbExport['subscriptionHistory'] ?? null) ? $dbExport['subscriptionHistory'] : []));
         $this->addCsvFile($zip, 'db/plans.csv', is_array($dbExport['plans'] ?? null) ? $dbExport['plans'] : [], $this->buildCsvHeaders(is_array($dbExport['plans'] ?? null) ? $dbExport['plans'] : []));
         $this->addCsvFile($zip, 'db/projectcreator/custom_projects.csv', is_array($projectExport['projects'] ?? null) ? $projectExport['projects'] : [], $this->buildCsvHeaders(is_array($projectExport['projects'] ?? null) ? $projectExport['projects'] : []));
+        $this->addCsvFile($zip, 'db/projectcreator/project_notes_public.csv', is_array($projectExport['notesPublic'] ?? null) ? $projectExport['notesPublic'] : [], $this->buildCsvHeaders(is_array($projectExport['notesPublic'] ?? null) ? $projectExport['notesPublic'] : []));
+        $this->addCsvFile($zip, 'db/projectcreator/project_notes_private.csv', is_array($projectExport['notesPrivate'] ?? null) ? $projectExport['notesPrivate'] : [], $this->buildCsvHeaders(is_array($projectExport['notesPrivate'] ?? null) ? $projectExport['notesPrivate'] : []));
         $this->addCsvFile($zip, 'changes/deleted_files.csv', $deletedFiles, ['fileId', 'path', 'size', 'mtime', 'etag', 'jobId']);
         $this->addCsvFile(
             $zip,
@@ -1891,6 +1914,9 @@ class OrganizationBackupService
             is_array($filesExport['fileInventory'] ?? null) ? $filesExport['fileInventory'] : [],
             ['fileId', 'projectId', 'path', 'size', 'mtime', 'etag'],
         );
+        foreach ($deckCsvPayload as $zipPath => $rows) {
+            $this->addCsvFile($zip, $zipPath, $rows, $this->buildCsvHeaders($rows));
+        }
 
         return [
             'json' => [
@@ -1922,6 +1948,56 @@ class OrganizationBackupService
     private function addCsvFile(ZipStreamer $zip, string $zipPath, array $rows, array $headers): void
     {
         $this->addTextFile($zip, $zipPath, $this->buildCsvString($rows, $headers));
+    }
+
+    /**
+     * @param array<string,mixed> $deckExport
+     * @return array<string,list<array<string,mixed>>>
+     */
+    private function buildDeckCompanionCsvPayload(array $deckExport): array
+    {
+        $payload = [];
+        foreach (self::DECK_COMPANION_CSV_FILES as $csvFile) {
+            $payload[$csvFile] = [];
+        }
+
+        $boardExports = is_array($deckExport['boardExports'] ?? null) ? $deckExport['boardExports'] : [];
+        foreach ($boardExports as $boardExport) {
+            if (!is_array($boardExport)) {
+                continue;
+            }
+
+            $board = $boardExport['board'] ?? null;
+            if (is_array($board)) {
+                $payload['deck/boards.csv'][] = $board;
+            }
+
+            $this->appendDeckRows($payload['deck/stacks.csv'], $boardExport['stacks'] ?? null);
+            $this->appendDeckRows($payload['deck/cards.csv'], $boardExport['cards'] ?? null);
+            $this->appendDeckRows($payload['deck/labels.csv'], $boardExport['labels'] ?? null);
+            $this->appendDeckRows($payload['deck/board_acl.csv'], $boardExport['boardAcl'] ?? null);
+            $this->appendDeckRows($payload['deck/assigned_users.csv'], $boardExport['assignedUsers'] ?? null);
+            $this->appendDeckRows($payload['deck/assigned_labels.csv'], $boardExport['assignedLabels'] ?? null);
+            $this->appendDeckRows($payload['deck/attachments.csv'], $boardExport['attachments'] ?? null);
+        }
+
+        return $payload;
+    }
+
+    /**
+     * @param list<array<string,mixed>> $targetRows
+     */
+    private function appendDeckRows(array &$targetRows, mixed $rows): void
+    {
+        if (!is_array($rows)) {
+            return;
+        }
+
+        foreach ($rows as $row) {
+            if (is_array($row)) {
+                $targetRows[] = $row;
+            }
+        }
     }
 
     private function addTextFile(ZipStreamer $zip, string $zipPath, string $content): void
@@ -2038,7 +2114,7 @@ class OrganizationBackupService
             sprintf('- Artifact: `%s`', $artifactName),
             sprintf('- Backup type: `%s`', $backupType),
             '- Canonical structured export: pretty-printed JSON files',
-            '- Human-readable companions: `summary/overview.md` and CSV files for flat datasets',
+            '- Human-readable companions: `summary/overview.md` and CSV files for flat DB and Deck datasets',
             '- Binary shared project files remain under `files/projects/...`',
             '',
             '## Archive layout',
@@ -2047,6 +2123,7 @@ class OrganizationBackupService
             '- `summary/overview.md`: manager-friendly snapshot of the backup',
             '- `db/**/*.json`: canonical structured exports',
             '- `db/**/*.csv`: spreadsheet-friendly exports for flat tables',
+            '- `deck/*.csv`: spreadsheet-friendly Deck table exports',
             '- `deck/boards/*.json`: nested deck board bundles',
             '- `files/file_inventory.csv`: readable inventory of scanned shared files',
             '- `changes/deleted_files.*`: incremental deletion reporting',
@@ -2134,6 +2211,8 @@ class OrganizationBackupService
                 $lines[] = sprintf('- ...and %d more projects in `db/projectcreator/custom_projects.csv`.', count($projects) - 10);
             }
         }
+        $lines[] = '- Public notes: `db/projectcreator/project_notes_public.csv`';
+        $lines[] = '- Private notes: `db/projectcreator/project_notes_private.csv`';
 
         $lines[] = '';
         $lines[] = '## Deck';
@@ -2146,6 +2225,7 @@ class OrganizationBackupService
                 $lines[] = sprintf('- ...and %d more boards in `deck/boards/`.', count($deckBoards) - 10);
             }
         }
+        $lines[] = '- Readable Deck table exports are available in `deck/*.csv`.';
 
         $lines[] = '';
         $lines[] = '## Files';
@@ -2352,15 +2432,20 @@ class OrganizationBackupService
      * @param list<int> $projectIds
      * @return list<array<string,mixed>>
      */
-    private function fetchAllPublicProjectNotes(array $projectIds): array
+    private function fetchAllProjectNotesByVisibility(array $projectIds, string $visibility): array
     {
         $rows = [];
+        $normalizedVisibility = strtolower(trim($visibility));
+        if (!in_array($normalizedVisibility, ['public', 'private'], true)) {
+            return [];
+        }
+
         foreach (array_chunk($projectIds, 500) as $chunk) {
             $qb = $this->db->getQueryBuilder();
             $result = $qb->select('*')
                 ->from('project_notes')
                 ->where($qb->expr()->in('project_id', $qb->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)))
-                ->andWhere($qb->expr()->eq('visibility', $qb->createNamedParameter('public')))
+                ->andWhere($qb->expr()->eq('visibility', $qb->createNamedParameter($normalizedVisibility)))
                 ->executeQuery();
             $rows = array_merge($rows, $result->fetchAll());
             $result->closeCursor();

@@ -33,6 +33,10 @@ return [
         ['root' => '/apps/organization', 'name' => 'Backup#getBackupJob', 'url' => '/organizations/{organizationId}/backups/jobs/{jobId}', 'verb' => 'GET'],
         ['root' => '/apps/organization', 'name' => 'Backup#listBackupEvents', 'url' => '/organizations/{organizationId}/backups/jobs/{jobId}/events', 'verb' => 'GET'],
         ['root' => '/apps/organization', 'name' => 'Backup#deleteBackupJob', 'url' => '/organizations/{organizationId}/backups/jobs/{jobId}', 'verb' => 'DELETE'],
+        ['root' => '/apps/organization', 'name' => 'Backup#createRollbackJob', 'url' => '/organizations/{organizationId}/backups/rollback-jobs', 'verb' => 'POST'],
+        ['root' => '/apps/organization', 'name' => 'Backup#listRollbackJobs', 'url' => '/organizations/{organizationId}/backups/rollback-jobs', 'verb' => 'GET'],
+        ['root' => '/apps/organization', 'name' => 'Backup#getRollbackJob', 'url' => '/organizations/{organizationId}/backups/rollback-jobs/{jobId}', 'verb' => 'GET'],
+        ['root' => '/apps/organization', 'name' => 'Backup#listRollbackEvents', 'url' => '/organizations/{organizationId}/backups/rollback-jobs/{jobId}/events', 'verb' => 'GET'],
         ['root' => '/apps/organization', 'name' => 'Organization#createOrganization', 'url' => '/organizations', 'verb' => 'POST'],
         ['root' => '/apps/organization', 'name' => 'Organization#updateSubscription', 'url' => '/organizations/{organizationId}/subscription', 'verb' => 'PUT'],
 

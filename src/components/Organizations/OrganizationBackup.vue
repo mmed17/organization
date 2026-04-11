@@ -106,6 +106,13 @@
 
 						<div class="job-right">
 							<NcButton
+								v-if="job.status === 'completed' && job.backupType === 'full'"
+								type="secondary"
+								@click.stop="createRollbackJob(job.jobId, 'dry_run')"
+								:disabled="creatingRollback">
+								Dry-run Rollback
+							</NcButton>
+							<NcButton
 								v-if="job.status === 'completed'"
 								type="primary"
 								@click.stop="download(job)"
@@ -216,6 +223,40 @@
 			</TransitionGroup>
 		</template>
 
+		<div class="rollback-panel">
+			<div class="rollback-header">
+				<h4>Rollback Jobs</h4>
+			</div>
+			<div v-if="rollbackJobs.length === 0" class="rollback-empty">
+				No rollback jobs yet.
+			</div>
+			<div v-else class="rollback-list">
+				<div v-for="job in rollbackJobs" :key="job.jobId" class="rollback-item">
+					<div class="rollback-main">
+						<div class="rollback-row">
+							<span class="rollback-name">Rollback #{{ job.jobId }}</span>
+							<span class="status-badge" :class="job.status">{{ formatStatus(job.status) }}</span>
+						</div>
+						<div class="rollback-meta">
+							<span>Mode: {{ job.mode === 'apply' ? 'Apply' : 'Dry-run' }}</span>
+							<span>Source backup: #{{ job.sourceBackupJobId }}</span>
+							<span>{{ formatDate(job.createdAt) }}</span>
+						</div>
+						<div v-if="job.errorMessage" class="rollback-error">{{ job.errorMessage }}</div>
+					</div>
+					<div class="rollback-actions">
+						<NcButton
+							v-if="job.mode === 'dry_run' && job.status === 'completed' && job.result?.canApply === true"
+							type="primary"
+							:disabled="creatingRollback"
+							@click="createRollbackJob(job.sourceBackupJobId, 'apply')">
+							Apply Rollback
+						</NcButton>
+					</div>
+				</div>
+			</div>
+		</div>
+
 		<!-- Delete Confirmation Modal -->
 		<NcDialog
 			v-if="deleteTarget"
@@ -263,20 +304,24 @@ const props = defineProps<{
 
 const initialLoading = ref(true)
 const creating = ref(false)
+const creatingRollback = ref(false)
 const actionLoading = ref<number | null>(null)
 const jobs = ref<any[]>([])
+const rollbackJobs = ref<any[]>([])
 const selectedJob = ref<any | null>(null)
 const events = ref<any[]>([])
 const deleteTarget = ref<any | null>(null)
 const selectedBackupType = ref<'full' | 'incremental'>('full')
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
+let rollbackPollTimer: ReturnType<typeof setInterval> | null = null
 
 const organizationId = computed(() => Number(props.organization?.id || 0))
 
 const jobsUrl = () => generateOcsUrl(`apps/organization/organizations/${props.organization.id}/backups/jobs`)
 const jobUrl = (jobId: number) => generateOcsUrl(`apps/organization/organizations/${props.organization.id}/backups/jobs/${jobId}`)
 const eventsUrl = (jobId: number) => generateOcsUrl(`apps/organization/organizations/${props.organization.id}/backups/jobs/${jobId}/events`)
+const rollbackJobsUrl = () => generateOcsUrl(`apps/organization/organizations/${props.organization.id}/backups/rollback-jobs`)
 const downloadUrl = (jobId: number) => generateUrl(`/apps/organization/organizations/${props.organization.id}/backups/jobs/${jobId}/download`)
 
 function isActiveStatus(status: string): boolean {
@@ -326,6 +371,18 @@ async function fetchJobs() {
 	jobs.value = data?.ocs?.data?.jobs ?? []
 }
 
+async function fetchRollbackJobs() {
+	const { data } = await axios.get(rollbackJobsUrl(), { params: { limit: 30, offset: 0 } })
+	rollbackJobs.value = data?.ocs?.data?.jobs ?? []
+
+	const hasActive = rollbackJobs.value.some((job) => isActiveStatus(job.status))
+	if (hasActive) {
+		startRollbackPolling()
+	} else {
+		stopRollbackPolling()
+	}
+}
+
 async function fetchJob(jobId: number) {
 	const { data } = await axios.get(jobUrl(jobId))
 	return data?.ocs?.data?.job ?? null
@@ -362,6 +419,26 @@ function stopPolling() {
 	}
 }
 
+function startRollbackPolling() {
+	if (rollbackPollTimer) {
+		return
+	}
+	rollbackPollTimer = setInterval(async () => {
+		try {
+			await fetchRollbackJobs()
+		} catch {
+			// Silently ignore polling errors
+		}
+	}, 2500)
+}
+
+function stopRollbackPolling() {
+	if (rollbackPollTimer) {
+		clearInterval(rollbackPollTimer)
+		rollbackPollTimer = null
+	}
+}
+
 async function createJob() {
 	creating.value = true
 	try {
@@ -378,6 +455,20 @@ async function createJob() {
 		}
 	} finally {
 		creating.value = false
+	}
+}
+
+async function createRollbackJob(sourceBackupJobId: number, mode: 'dry_run' | 'apply') {
+	creatingRollback.value = true
+	try {
+		await confirmPassword()
+		await axios.post(rollbackJobsUrl(), {
+			sourceBackupJobId,
+			mode,
+		})
+		await fetchRollbackJobs()
+	} finally {
+		creatingRollback.value = false
 	}
 }
 
@@ -424,7 +515,9 @@ async function deleteJob() {
 
 async function resetAndReload() {
 	stopPolling()
+	stopRollbackPolling()
 	jobs.value = []
+	rollbackJobs.value = []
 	selectedJob.value = null
 	events.value = []
 	deleteTarget.value = null
@@ -438,6 +531,7 @@ async function resetAndReload() {
 	initialLoading.value = true
 	try {
 		await fetchJobs()
+		await fetchRollbackJobs()
 	} finally {
 		initialLoading.value = false
 	}
@@ -452,6 +546,7 @@ watch(organizationId, async (newId, oldId) => {
 
 onBeforeUnmount(() => {
 	stopPolling()
+	stopRollbackPolling()
 })
 </script>
 
@@ -1019,6 +1114,86 @@ onBeforeUnmount(() => {
 	color: var(--color-text-light);
 	line-height: 1.45;
 	word-break: break-word;
+}
+
+/* ─── Rollback Jobs ─── */
+.rollback-panel {
+	border: 1px solid var(--color-border);
+	border-radius: var(--border-radius-large);
+	padding: 14px;
+	background: var(--color-main-background);
+}
+
+.rollback-header h4 {
+	margin: 0;
+	font-size: 0.92rem;
+	font-weight: 700;
+}
+
+.rollback-empty {
+	margin-top: 10px;
+	font-size: 0.85rem;
+	color: var(--color-text-maxcontrast);
+}
+
+.rollback-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-top: 10px;
+}
+
+.rollback-item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	border: 1px solid var(--color-border);
+	border-radius: var(--border-radius-element);
+	padding: 10px;
+	background: var(--color-background-hover);
+}
+
+.rollback-main {
+	min-width: 0;
+}
+
+.rollback-actions {
+	display: flex;
+	align-items: center;
+}
+
+.rollback-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.rollback-name {
+	font-size: 0.86rem;
+	font-weight: 700;
+}
+
+.rollback-meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	margin-top: 4px;
+	font-size: 0.78rem;
+	color: var(--color-text-maxcontrast);
+}
+
+.rollback-error {
+	margin-top: 4px;
+	font-size: 0.78rem;
+	color: var(--color-error);
+}
+
+@media (max-width: 600px) {
+	.rollback-item {
+		flex-direction: column;
+		align-items: flex-start;
+	}
 }
 
 /* ─── Delete Modal ─── */

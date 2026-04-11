@@ -17,6 +17,7 @@ use OCP\IUserSession;
 
 use OCA\Organization\Db\UserMapper;
 use OCA\Organization\Service\OrganizationBackupService;
+use OCA\Organization\Service\OrganizationRollbackService;
 
 class BackupController extends OCSController
 {
@@ -24,6 +25,7 @@ class BackupController extends OCSController
         string $appName,
         IRequest $request,
         private OrganizationBackupService $backupService,
+        private OrganizationRollbackService $rollbackService,
         private UserMapper $userMapper,
         private IGroupManager $groupManager,
         private IUserSession $userSession,
@@ -126,6 +128,76 @@ class BackupController extends OCSController
         }
 
         return new DataResponse(['status' => 'ok']);
+    }
+
+    #[NoAdminRequired]
+    #[PasswordConfirmationRequired]
+    public function createRollbackJob(int $organizationId, int $sourceBackupJobId, ?string $mode = null): DataResponse
+    {
+        $this->assertCanManageOrganization($organizationId, true);
+
+        $user = $this->userSession->getUser();
+        if ($user === null) {
+            throw new OCSForbiddenException('Authentication required');
+        }
+
+        $resolvedMode = strtolower(trim((string) ($mode ?? 'dry_run')));
+        if (!in_array($resolvedMode, ['dry_run', 'apply'], true)) {
+            throw new OCSException('Invalid rollback mode. Supported values: dry_run, apply', 400);
+        }
+
+        try {
+            $job = $this->rollbackService->createJob(
+                $organizationId,
+                $sourceBackupJobId,
+                $user->getUID(),
+                $resolvedMode,
+            );
+        } catch (\InvalidArgumentException $e) {
+            throw new OCSException($e->getMessage(), 400);
+        }
+
+        return new DataResponse([
+            'job' => $job,
+        ]);
+    }
+
+    #[NoAdminRequired]
+    public function listRollbackJobs(int $organizationId, ?string $status = null, int $limit = 20, int $offset = 0): DataResponse
+    {
+        $this->assertCanManageOrganization($organizationId, true);
+
+        return new DataResponse($this->rollbackService->listJobs($organizationId, $status, $limit, $offset));
+    }
+
+    #[NoAdminRequired]
+    public function getRollbackJob(int $organizationId, int $jobId): DataResponse
+    {
+        $this->assertCanManageOrganization($organizationId, true);
+
+        try {
+            $job = $this->rollbackService->getJob($organizationId, $jobId);
+        } catch (\InvalidArgumentException) {
+            throw new OCSNotFoundException('Rollback job not found');
+        }
+
+        return new DataResponse([
+            'job' => $job,
+        ]);
+    }
+
+    #[NoAdminRequired]
+    public function listRollbackEvents(int $organizationId, int $jobId, int $limit = 200, int $offset = 0): DataResponse
+    {
+        $this->assertCanManageOrganization($organizationId, true);
+
+        try {
+            $events = $this->rollbackService->listEvents($organizationId, $jobId, $limit, $offset);
+        } catch (\InvalidArgumentException) {
+            throw new OCSNotFoundException('Rollback job not found');
+        }
+
+        return new DataResponse($events);
     }
 
     /**

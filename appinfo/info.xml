@@ -37,5 +37,6 @@ This application provides organization management functionality including:
         <job>OCA\Organization\BackgroundJob\CheckExpiredSubscriptions</job>
         <job>OCA\Organization\BackgroundJob\RunAccountHandoverJob</job>
         <job>OCA\Organization\BackgroundJob\RunOrganizationBackupJob</job>
+        <job>OCA\Organization\BackgroundJob\RunOrganizationRollbackJob</job>
     </background-jobs>
 </info>
