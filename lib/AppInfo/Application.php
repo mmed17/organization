@@ -4,13 +4,20 @@ declare(strict_types=1);
 
 namespace OCA\Organization\AppInfo;
 
+use OCA\Organization\Listener\TalkAutoCompleteListener;
+use OCA\Organization\Listener\TalkRoomGuardListener;
 use OCP\AppFramework\App;
 use OCP\AppFramework\Bootstrap\IBootContext;
 use OCP\AppFramework\Bootstrap\IBootstrap;
 use OCP\AppFramework\Bootstrap\IRegistrationContext;
 
+use OCP\Collaboration\AutoComplete\AutoCompleteFilterEvent;
+
 use OCA\Organization\Middleware\SubscriptionMiddleware;
 use OCA\Organization\Notification\OrganizationNotifier;
+
+use OCA\Talk\Events\BeforeAttendeesAddedEvent;
+use OCA\Talk\Events\BeforeUserJoinedRoomEvent;
 
 class Application extends App implements IBootstrap
 {
@@ -28,6 +35,10 @@ class Application extends App implements IBootstrap
 
         // Register the app's notification provider (bell notifications)
         $context->registerNotifierService(OrganizationNotifier::class);
+
+        $context->registerEventListener(AutoCompleteFilterEvent::class, TalkAutoCompleteListener::class);
+        $context->registerEventListener(BeforeAttendeesAddedEvent::class, TalkRoomGuardListener::class);
+        $context->registerEventListener(BeforeUserJoinedRoomEvent::class, TalkRoomGuardListener::class);
     }
 
     public function boot(IBootContext $context): void

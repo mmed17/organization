@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace OCA\Organization\Db;
 
 use OCP\IDBConnection;
+use OCP\DB\QueryBuilder\IQueryBuilder;
 
 class UserMapper
 {
@@ -74,6 +75,38 @@ class UserMapper
             'organization_id' => (int) $row['organization_id'],
             'role' => (string) $row['role'],
         ];
+    }
+
+    /**
+     * @param string[] $userIds
+     * @return array<string,array{organization_id:int,role:string}>
+     */
+    public function getOrganizationMemberships(array $userIds): array
+    {
+        $userIds = array_values(array_unique(array_filter(array_map('trim', $userIds), static fn (string $userId): bool => $userId !== '')));
+        if ($userIds === []) {
+            return [];
+        }
+
+        $qb = $this->db->getQueryBuilder();
+        $qb->select('user_uid', 'organization_id', 'role')
+            ->from('organization_members')
+            ->where($qb->expr()->in('user_uid', $qb->createNamedParameter($userIds, IQueryBuilder::PARAM_STR_ARRAY)));
+
+        $result = $qb->executeQuery();
+        $rows = $result->fetchAll();
+        $result->closeCursor();
+
+        $memberships = [];
+        foreach ($rows as $row) {
+            $userId = (string) $row['user_uid'];
+            $memberships[$userId] = [
+                'organization_id' => (int) $row['organization_id'],
+                'role' => (string) $row['role'],
+            ];
+        }
+
+        return $memberships;
     }
 
     /**
