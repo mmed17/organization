@@ -36,18 +36,6 @@ class OrganizationBackupService
 
     /** @var list<string> */
     private const STEP_ORDER = ['collect_db', 'export_deck', 'export_files', 'finalize'];
-    /** @var list<string> */
-    private const DECK_COMPANION_CSV_FILES = [
-        'deck/boards.csv',
-        'deck/stacks.csv',
-        'deck/cards.csv',
-        'deck/labels.csv',
-        'deck/board_acl.csv',
-        'deck/assigned_users.csv',
-        'deck/assigned_labels.csv',
-        'deck/attachments.csv',
-    ];
-
     public function __construct(
         private IDBConnection $db,
         private IAppDataFactory $appDataFactory,
@@ -1586,6 +1574,7 @@ class OrganizationBackupService
 
             $deletedFiles[] = [
                 'fileId' => $fileId,
+                'projectId' => isset($existing['projectId']) ? (int) $existing['projectId'] : 0,
                 'path' => (string) ($existing['path'] ?? ''),
                 'size' => isset($existing['size']) ? (int) $existing['size'] : null,
                 'mtime' => isset($existing['mtime']) ? (int) $existing['mtime'] : null,
@@ -1872,20 +1861,8 @@ class OrganizationBackupService
         array $filesExport,
         array $deletedFiles,
     ): array {
-        $deckCsvPayload = $this->buildDeckCompanionCsvPayload($deckExport);
-        $csvFiles = [
-            'db/organization.csv',
-            'db/organization_members.csv',
-            'db/subscriptions.csv',
-            'db/subscriptions_history.csv',
-            'db/plans.csv',
-            'db/projectcreator/custom_projects.csv',
-            'db/projectcreator/project_notes_public.csv',
-            'db/projectcreator/project_notes_private.csv',
-            'changes/deleted_files.csv',
-            'files/file_inventory.csv',
-            ...array_keys($deckCsvPayload),
-        ];
+        $projectCsvPayload = $this->buildProjectReadableCsvPayload($backupType, $projectExport, $deckExport, $filesExport, $deletedFiles);
+        $csvFiles = array_keys($projectCsvPayload);
         $markdownFiles = [
             'README.md',
             'summary/overview.md',
@@ -1898,24 +1875,10 @@ class OrganizationBackupService
             $this->buildOverviewMarkdown($artifactName, $backupType, $preSummary, $counts, $warnings, $dbExport, $projectExport, $deckExport, $filesExport, $deletedFiles),
         );
 
-        $organizationRow = is_array($dbExport['organization'] ?? null) ? [$dbExport['organization']] : [];
-        $this->addCsvFile($zip, 'db/organization.csv', $organizationRow, $this->buildCsvHeaders($organizationRow));
-        $this->addCsvFile($zip, 'db/organization_members.csv', is_array($dbExport['members'] ?? null) ? $dbExport['members'] : [], $this->buildCsvHeaders(is_array($dbExport['members'] ?? null) ? $dbExport['members'] : []));
-        $this->addCsvFile($zip, 'db/subscriptions.csv', is_array($dbExport['subscriptions'] ?? null) ? $dbExport['subscriptions'] : [], $this->buildCsvHeaders(is_array($dbExport['subscriptions'] ?? null) ? $dbExport['subscriptions'] : []));
-        $this->addCsvFile($zip, 'db/subscriptions_history.csv', is_array($dbExport['subscriptionHistory'] ?? null) ? $dbExport['subscriptionHistory'] : [], $this->buildCsvHeaders(is_array($dbExport['subscriptionHistory'] ?? null) ? $dbExport['subscriptionHistory'] : []));
-        $this->addCsvFile($zip, 'db/plans.csv', is_array($dbExport['plans'] ?? null) ? $dbExport['plans'] : [], $this->buildCsvHeaders(is_array($dbExport['plans'] ?? null) ? $dbExport['plans'] : []));
-        $this->addCsvFile($zip, 'db/projectcreator/custom_projects.csv', is_array($projectExport['projects'] ?? null) ? $projectExport['projects'] : [], $this->buildCsvHeaders(is_array($projectExport['projects'] ?? null) ? $projectExport['projects'] : []));
-        $this->addCsvFile($zip, 'db/projectcreator/project_notes_public.csv', is_array($projectExport['notesPublic'] ?? null) ? $projectExport['notesPublic'] : [], $this->buildCsvHeaders(is_array($projectExport['notesPublic'] ?? null) ? $projectExport['notesPublic'] : []));
-        $this->addCsvFile($zip, 'db/projectcreator/project_notes_private.csv', is_array($projectExport['notesPrivate'] ?? null) ? $projectExport['notesPrivate'] : [], $this->buildCsvHeaders(is_array($projectExport['notesPrivate'] ?? null) ? $projectExport['notesPrivate'] : []));
-        $this->addCsvFile($zip, 'changes/deleted_files.csv', $deletedFiles, ['fileId', 'path', 'size', 'mtime', 'etag', 'jobId']);
-        $this->addCsvFile(
-            $zip,
-            'files/file_inventory.csv',
-            is_array($filesExport['fileInventory'] ?? null) ? $filesExport['fileInventory'] : [],
-            ['fileId', 'projectId', 'path', 'size', 'mtime', 'etag'],
-        );
-        foreach ($deckCsvPayload as $zipPath => $rows) {
-            $this->addCsvFile($zip, $zipPath, $rows, $this->buildCsvHeaders($rows));
+        foreach ($projectCsvPayload as $zipPath => $csvDefinition) {
+            $rows = is_array($csvDefinition['rows'] ?? null) ? $csvDefinition['rows'] : [];
+            $headers = is_array($csvDefinition['headers'] ?? null) ? $csvDefinition['headers'] : [];
+            $this->addCsvFile($zip, $zipPath, $rows, $headers);
         }
 
         return [
@@ -1951,53 +1914,451 @@ class OrganizationBackupService
     }
 
     /**
+     * @param array<string,mixed> $projectExport
      * @param array<string,mixed> $deckExport
-     * @return array<string,list<array<string,mixed>>>
+     * @param array<string,mixed> $filesExport
+     * @param list<array<string,mixed>> $deletedFiles
+     * @return array<string,array{rows:list<array<string,mixed>>,headers:list<string>}>
      */
-    private function buildDeckCompanionCsvPayload(array $deckExport): array
+    private function buildProjectReadableCsvPayload(
+        string $backupType,
+        array $projectExport,
+        array $deckExport,
+        array $filesExport,
+        array $deletedFiles,
+    ): array
     {
-        $payload = [];
-        foreach (self::DECK_COMPANION_CSV_FILES as $csvFile) {
-            $payload[$csvFile] = [];
-        }
-
+        $projects = is_array($projectExport['projects'] ?? null) ? $projectExport['projects'] : [];
+        $timelineRows = is_array($projectExport['timeline'] ?? null) ? $projectExport['timeline'] : [];
+        $activityRows = is_array($projectExport['activity'] ?? null) ? $projectExport['activity'] : [];
+        $fileInventory = is_array($filesExport['fileInventory'] ?? null) ? $filesExport['fileInventory'] : [];
         $boardExports = is_array($deckExport['boardExports'] ?? null) ? $deckExport['boardExports'] : [];
+        $timelineByProjectId = $this->groupRowsByIntKey($timelineRows, 'project_id');
+        $activityByProjectId = $this->groupRowsByIntKey($activityRows, 'project_id');
+        $filesByProjectId = $this->groupRowsByIntKey($fileInventory, 'projectId');
+        $deletedFilesByProjectId = $this->groupRowsByIntKey($deletedFiles, 'projectId');
+        $notesByProjectId = [];
+        $this->appendProjectNotes($notesByProjectId, $projectExport['notesPublic'] ?? null, 'public');
+        $this->appendProjectNotes($notesByProjectId, $projectExport['notesPrivate'] ?? null, 'private');
+
+        $boardBundlesById = [];
         foreach ($boardExports as $boardExport) {
             if (!is_array($boardExport)) {
                 continue;
             }
 
-            $board = $boardExport['board'] ?? null;
-            if (is_array($board)) {
-                $payload['deck/boards.csv'][] = $board;
+            $boardId = isset($boardExport['boardId']) ? (int) $boardExport['boardId'] : (isset($boardExport['board']['id']) ? (int) $boardExport['board']['id'] : 0);
+            if ($boardId > 0) {
+                $boardBundlesById[$boardId] = $boardExport;
+            }
+        }
+
+        $payload = [];
+        $indexRows = [];
+        foreach ($projects as $project) {
+            if (!is_array($project)) {
+                continue;
             }
 
-            $this->appendDeckRows($payload['deck/stacks.csv'], $boardExport['stacks'] ?? null);
-            $this->appendDeckRows($payload['deck/cards.csv'], $boardExport['cards'] ?? null);
-            $this->appendDeckRows($payload['deck/labels.csv'], $boardExport['labels'] ?? null);
-            $this->appendDeckRows($payload['deck/board_acl.csv'], $boardExport['boardAcl'] ?? null);
-            $this->appendDeckRows($payload['deck/assigned_users.csv'], $boardExport['assignedUsers'] ?? null);
-            $this->appendDeckRows($payload['deck/assigned_labels.csv'], $boardExport['assignedLabels'] ?? null);
-            $this->appendDeckRows($payload['deck/attachments.csv'], $boardExport['attachments'] ?? null);
+            $projectId = isset($project['id']) ? (int) $project['id'] : 0;
+            if ($projectId <= 0) {
+                continue;
+            }
+
+            $projectName = trim((string) ($project['name'] ?? ''));
+            $projectLabel = $projectName !== '' ? $projectName : sprintf('project-%d', $projectId);
+            $projectPath = sprintf('readable/projects/%d-%s', $projectId, $this->sanitizeZipPathSegment($projectLabel));
+
+            $boardId = isset($project['board_id']) ? (int) $project['board_id'] : 0;
+            $boardBundle = $boardId > 0 ? ($boardBundlesById[$boardId] ?? null) : null;
+            $board = is_array($boardBundle['board'] ?? null) ? $boardBundle['board'] : [];
+            $noteRows = $this->formatReadableRows($notesByProjectId[$projectId] ?? [], $this->getReadableTimeFieldMap());
+            $cardRows = $this->buildReadableDeckCardRowsForProject($project, $boardBundle);
+            $timelineProjectRows = $this->formatReadableRows($timelineByProjectId[$projectId] ?? [], $this->getReadableTimeFieldMap());
+            $activityProjectRows = $this->formatReadableRows($activityByProjectId[$projectId] ?? [], $this->getReadableTimeFieldMap());
+            $fileRows = $this->buildReadableFileRows($filesByProjectId[$projectId] ?? []);
+            $deletedProjectRows = $this->buildReadableDeletedFileRows($deletedFilesByProjectId[$projectId] ?? []);
+
+            $summaryRow = $this->buildReadableProjectSummaryRow(
+                $project,
+                $board,
+                count($noteRows),
+                count($cardRows),
+                count($fileRows),
+                count($deletedProjectRows),
+                count($timelineProjectRows),
+                count($activityProjectRows),
+            );
+
+            $indexRows[] = [
+                'project_id' => $projectId,
+                'project_name' => $projectLabel,
+                'owner_id' => (string) ($project['owner_id'] ?? ''),
+                'board_id' => $boardId > 0 ? $boardId : '',
+                'board_title' => (string) ($board['title'] ?? ''),
+                'note_count' => count($noteRows),
+                'card_count' => count($cardRows),
+                'file_count' => count($fileRows),
+                'deleted_file_count' => count($deletedProjectRows),
+            ];
+
+            $payload[$projectPath . '/summary.csv'] = [
+                'rows' => [$summaryRow],
+                'headers' => array_keys($summaryRow),
+            ];
+            $payload[$projectPath . '/notes.csv'] = [
+                'rows' => $noteRows,
+                'headers' => $this->buildCsvHeaders($noteRows) !== [] ? $this->buildCsvHeaders($noteRows) : $this->getReadableProjectCsvHeaders('notes.csv'),
+            ];
+            $payload[$projectPath . '/deck_cards.csv'] = [
+                'rows' => $cardRows,
+                'headers' => $this->buildCsvHeaders($cardRows) !== [] ? $this->buildCsvHeaders($cardRows) : $this->getReadableProjectCsvHeaders('deck_cards.csv'),
+            ];
+            $payload[$projectPath . '/files.csv'] = [
+                'rows' => $fileRows,
+                'headers' => $this->buildCsvHeaders($fileRows) !== [] ? $this->buildCsvHeaders($fileRows) : $this->getReadableProjectCsvHeaders('files.csv'),
+            ];
+            $payload[$projectPath . '/timeline.csv'] = [
+                'rows' => $timelineProjectRows,
+                'headers' => $this->buildCsvHeaders($timelineProjectRows) !== [] ? $this->buildCsvHeaders($timelineProjectRows) : $this->getReadableProjectCsvHeaders('timeline.csv'),
+            ];
+            $payload[$projectPath . '/activity.csv'] = [
+                'rows' => $activityProjectRows,
+                'headers' => $this->buildCsvHeaders($activityProjectRows) !== [] ? $this->buildCsvHeaders($activityProjectRows) : $this->getReadableProjectCsvHeaders('activity.csv'),
+            ];
+            if ($backupType === self::BACKUP_TYPE_INCREMENTAL) {
+                $payload[$projectPath . '/deleted_files.csv'] = [
+                    'rows' => $deletedProjectRows,
+                    'headers' => $this->buildCsvHeaders($deletedProjectRows) !== [] ? $this->buildCsvHeaders($deletedProjectRows) : $this->getReadableProjectCsvHeaders('deleted_files.csv'),
+                ];
+            }
         }
+
+        $payload['readable/projects/index.csv'] = [
+            'rows' => $indexRows,
+            'headers' => $this->buildCsvHeaders($indexRows) !== [] ? $this->buildCsvHeaders($indexRows) : $this->getReadableProjectCsvHeaders('index.csv'),
+        ];
 
         return $payload;
     }
 
     /**
-     * @param list<array<string,mixed>> $targetRows
+     * @param array<int,list<array<string,mixed>>> $target
+     * @param mixed $rows
      */
-    private function appendDeckRows(array &$targetRows, mixed $rows): void
+    private function appendProjectNotes(array &$target, mixed $rows, string $visibility): void
     {
         if (!is_array($rows)) {
             return;
         }
 
         foreach ($rows as $row) {
-            if (is_array($row)) {
-                $targetRows[] = $row;
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $projectId = isset($row['project_id']) ? (int) $row['project_id'] : 0;
+            if ($projectId <= 0) {
+                continue;
+            }
+
+            $row['visibility'] = $visibility;
+            $target[$projectId][] = $row;
+        }
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function getReadableProjectCsvHeaders(string $fileName): array
+    {
+        return match ($fileName) {
+            'index.csv' => ['project_id', 'project_name', 'owner_id', 'board_id', 'board_title', 'note_count', 'card_count', 'file_count', 'deleted_file_count'],
+            'notes.csv' => ['id', 'project_id', 'visibility', 'created_at', 'updated_at', 'title', 'content'],
+            'deck_cards.csv' => ['id', 'project_id', 'project_name', 'board_id', 'board_title', 'stack_id', 'stack_title', 'title', 'description', 'duedate', 'archived_at', 'label_titles', 'assigned_users', 'attachment_filenames', 'attachment_count'],
+            'files.csv' => ['fileId', 'projectId', 'path', 'size', 'mtime', 'etag'],
+            'timeline.csv' => ['id', 'project_id', 'created_at', 'updated_at'],
+            'activity.csv' => ['id', 'project_id', 'created_at', 'updated_at'],
+            'deleted_files.csv' => ['fileId', 'projectId', 'path', 'size', 'mtime', 'etag', 'jobId'],
+            default => [],
+        };
+    }
+
+    /**
+     * @param list<array<string,mixed>> $rows
+     * @return array<int,list<array<string,mixed>>>
+     */
+    private function groupRowsByIntKey(array $rows, string $key): array
+    {
+        $grouped = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $groupId = isset($row[$key]) ? (int) $row[$key] : 0;
+            if ($groupId <= 0) {
+                continue;
+            }
+
+            $grouped[$groupId][] = $row;
+        }
+
+        return $grouped;
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function getReadableTimeFieldMap(): array
+    {
+        return [
+            'mtime' => 'unix',
+            'created_at' => 'datetime',
+            'updated_at' => 'datetime',
+            'deleted_at' => 'datetime',
+            'last_modified' => 'datetime',
+            'archived_at' => 'datetime',
+            'duedate' => 'datetime',
+            'due_date' => 'datetime',
+            'start_at' => 'datetime',
+            'end_at' => 'datetime',
+        ];
+    }
+
+    /**
+     * @param list<array<string,mixed>> $rows
+     * @param array<string,string> $timeFieldMap
+     * @return list<array<string,mixed>>
+     */
+    private function formatReadableRows(array $rows, array $timeFieldMap): array
+    {
+        $formatted = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            foreach ($timeFieldMap as $field => $mode) {
+                if (!array_key_exists($field, $row)) {
+                    continue;
+                }
+
+                $row[$field] = $mode === 'unix'
+                    ? $this->formatReadableUnixTimestamp($row[$field])
+                    : $this->formatReadableDateTimeValue($row[$field]);
+            }
+
+            $formatted[] = $row;
+        }
+
+        return $formatted;
+    }
+
+    /**
+     * @param array<string,mixed> $project
+     * @param array<string,mixed>|null $boardBundle
+     * @return list<array<string,mixed>>
+     */
+    private function buildReadableDeckCardRowsForProject(array $project, ?array $boardBundle): array
+    {
+        if ($boardBundle === null) {
+            return [];
+        }
+
+        $board = is_array($boardBundle['board'] ?? null) ? $boardBundle['board'] : [];
+        $stacks = is_array($boardBundle['stacks'] ?? null) ? $boardBundle['stacks'] : [];
+        $cards = is_array($boardBundle['cards'] ?? null) ? $boardBundle['cards'] : [];
+        $labels = is_array($boardBundle['labels'] ?? null) ? $boardBundle['labels'] : [];
+        $assignedUsers = is_array($boardBundle['assignedUsers'] ?? null) ? $boardBundle['assignedUsers'] : [];
+        $assignedLabels = is_array($boardBundle['assignedLabels'] ?? null) ? $boardBundle['assignedLabels'] : [];
+        $attachments = is_array($boardBundle['attachments'] ?? null) ? $boardBundle['attachments'] : [];
+
+        $stackTitles = [];
+        foreach ($stacks as $stack) {
+            if (is_array($stack) && isset($stack['id'])) {
+                $stackTitles[(int) $stack['id']] = (string) ($stack['title'] ?? '');
             }
         }
+
+        $labelTitles = [];
+        foreach ($labels as $label) {
+            if (is_array($label) && isset($label['id'])) {
+                $labelTitles[(int) $label['id']] = (string) ($label['title'] ?? '');
+            }
+        }
+
+        $usersByCardId = [];
+        foreach ($assignedUsers as $assignedUser) {
+            if (!is_array($assignedUser)) {
+                continue;
+            }
+
+            $cardId = isset($assignedUser['card_id']) ? (int) $assignedUser['card_id'] : 0;
+            if ($cardId <= 0) {
+                continue;
+            }
+
+            $participant = trim((string) ($assignedUser['participant'] ?? $assignedUser['user_id'] ?? ''));
+            if ($participant !== '') {
+                $usersByCardId[$cardId][] = $participant;
+            }
+        }
+
+        $labelIdsByCardId = [];
+        foreach ($assignedLabels as $assignedLabel) {
+            if (!is_array($assignedLabel)) {
+                continue;
+            }
+
+            $cardId = isset($assignedLabel['card_id']) ? (int) $assignedLabel['card_id'] : 0;
+            $labelId = isset($assignedLabel['label_id']) ? (int) $assignedLabel['label_id'] : 0;
+            if ($cardId > 0 && $labelId > 0 && isset($labelTitles[$labelId])) {
+                $labelIdsByCardId[$cardId][] = $labelTitles[$labelId];
+            }
+        }
+
+        $attachmentsByCardId = [];
+        foreach ($attachments as $attachment) {
+            if (!is_array($attachment)) {
+                continue;
+            }
+
+            $cardId = isset($attachment['card_id']) ? (int) $attachment['card_id'] : 0;
+            if ($cardId <= 0) {
+                continue;
+            }
+
+            $filename = trim((string) ($attachment['filename'] ?? $attachment['basename'] ?? ''));
+            if ($filename !== '') {
+                $attachmentsByCardId[$cardId][] = $filename;
+            }
+        }
+
+        $rows = [];
+        foreach ($cards as $card) {
+            if (!is_array($card)) {
+                continue;
+            }
+
+            $cardId = isset($card['id']) ? (int) $card['id'] : 0;
+            $stackId = isset($card['stack_id']) ? (int) $card['stack_id'] : 0;
+            $row = $card;
+            $row['project_id'] = isset($project['id']) ? (int) $project['id'] : 0;
+            $row['project_name'] = (string) ($project['name'] ?? '');
+            $row['board_id'] = isset($board['id']) ? (int) $board['id'] : '';
+            $row['board_title'] = (string) ($board['title'] ?? '');
+            $row['stack_id'] = $stackId > 0 ? $stackId : '';
+            $row['stack_title'] = $stackId > 0 ? ($stackTitles[$stackId] ?? '') : '';
+            $row['label_titles'] = $this->implodeReadableList($labelIdsByCardId[$cardId] ?? []);
+            $row['assigned_users'] = $this->implodeReadableList($usersByCardId[$cardId] ?? []);
+            $row['attachment_filenames'] = $this->implodeReadableList($attachmentsByCardId[$cardId] ?? []);
+            $row['attachment_count'] = count($attachmentsByCardId[$cardId] ?? []);
+            $rows[] = $row;
+        }
+
+        return $this->formatReadableRows($rows, $this->getReadableTimeFieldMap());
+    }
+
+    /**
+     * @param list<array<string,mixed>> $rows
+     * @return list<array<string,mixed>>
+     */
+    private function buildReadableFileRows(array $rows): array
+    {
+        return $this->formatReadableRows($rows, [
+            'mtime' => 'unix',
+        ]);
+    }
+
+    /**
+     * @param list<array<string,mixed>> $rows
+     * @return list<array<string,mixed>>
+     */
+    private function buildReadableDeletedFileRows(array $rows): array
+    {
+        return $this->formatReadableRows($rows, [
+            'mtime' => 'unix',
+            'deleted_at' => 'datetime',
+        ]);
+    }
+
+    /**
+     * @param array<string,mixed> $project
+     * @param array<string,mixed> $board
+     * @return array<string,mixed>
+     */
+    private function buildReadableProjectSummaryRow(
+        array $project,
+        array $board,
+        int $noteCount,
+        int $cardCount,
+        int $fileCount,
+        int $deletedFileCount,
+        int $timelineCount,
+        int $activityCount,
+    ): array {
+        $row = $project;
+        $row['board_title'] = (string) ($board['title'] ?? '');
+        $row['note_count'] = $noteCount;
+        $row['card_count'] = $cardCount;
+        $row['file_count'] = $fileCount;
+        $row['deleted_file_count'] = $deletedFileCount;
+        $row['timeline_count'] = $timelineCount;
+        $row['activity_count'] = $activityCount;
+
+        $formattedRows = $this->formatReadableRows([$row], $this->getReadableTimeFieldMap());
+
+        return $formattedRows[0] ?? $row;
+    }
+
+    /**
+     * @param list<string> $values
+     */
+    private function implodeReadableList(array $values): string
+    {
+        $values = array_values(array_unique(array_filter(array_map(static fn (string $value): string => trim($value), $values), static fn (string $value): bool => $value !== '')));
+
+        return implode('; ', $values);
+    }
+
+    private function formatReadableUnixTimestamp(mixed $value): string
+    {
+        if ($value === null || $value === '') {
+            return '';
+        }
+
+        if (!is_numeric($value)) {
+            return (string) $value;
+        }
+
+        try {
+            $dateTime = (new \DateTimeImmutable('@' . (string) ((int) $value)))->setTimezone($this->resolveInstanceTimeZone());
+        } catch (\Throwable) {
+            return (string) $value;
+        }
+
+        return $dateTime->format('Y-m-d H:i:s');
+    }
+
+    private function formatReadableDateTimeValue(mixed $value): string
+    {
+        if ($value === null) {
+            return '';
+        }
+
+        $stringValue = trim((string) $value);
+        if ($stringValue === '') {
+            return '';
+        }
+
+        try {
+            $dateTime = new \DateTimeImmutable($stringValue, new \DateTimeZone('UTC'));
+        } catch (\Throwable) {
+            return $stringValue;
+        }
+
+        return $dateTime->setTimezone($this->resolveInstanceTimeZone())->format('Y-m-d H:i:s');
     }
 
     private function addTextFile(ZipStreamer $zip, string $zipPath, string $content): void
@@ -2114,19 +2475,24 @@ class OrganizationBackupService
             sprintf('- Artifact: `%s`', $artifactName),
             sprintf('- Backup type: `%s`', $backupType),
             '- Canonical structured export: pretty-printed JSON files',
-            '- Human-readable companions: `summary/overview.md` and CSV files for flat DB and Deck datasets',
+            '- Human-readable companions: `summary/overview.md` and project-first CSV bundles under `readable/projects/`',
             '- Binary shared project files remain under `files/projects/...`',
+            '- Readable CSV timestamps are formatted for the instance timezone when available',
             '',
             '## Archive layout',
             '',
             '- `manifest.json`: machine-readable archive metadata',
             '- `summary/overview.md`: manager-friendly snapshot of the backup',
             '- `db/**/*.json`: canonical structured exports',
-            '- `db/**/*.csv`: spreadsheet-friendly exports for flat tables',
-            '- `deck/*.csv`: spreadsheet-friendly Deck table exports',
+            '- `readable/projects/index.csv`: project index with readable counts',
+            '- `readable/projects/{project}/summary.csv`: one-row project summary',
+            '- `readable/projects/{project}/notes.csv`: merged public and private notes',
+            '- `readable/projects/{project}/deck_cards.csv`: card list with board and stack context',
+            '- `readable/projects/{project}/files.csv`: shared file inventory for that project',
+            '- `readable/projects/{project}/timeline.csv` and `activity.csv`: project event history',
+            '- `readable/projects/{project}/deleted_files.csv`: incremental deleted files for that project',
             '- `deck/boards/*.json`: nested deck board bundles',
-            '- `files/file_inventory.csv`: readable inventory of scanned shared files',
-            '- `changes/deleted_files.*`: incremental deletion reporting',
+            '- `changes/deleted_files.json`: canonical incremental deletion reporting',
             '',
         ]);
     }
@@ -2170,7 +2536,7 @@ class OrganizationBackupService
             sprintf('- Artifact: `%s`', $artifactName),
             sprintf('- Organization: `%s`', $organizationName),
             sprintf('- Backup type: `%s`', $backupType),
-            sprintf('- Generated at: `%s`', (string) ($preSummary['generatedAt'] ?? '')),
+            sprintf('- Generated at: `%s`', $this->formatReadableDateTimeValue($preSummary['generatedAt'] ?? '')),
             sprintf('- Requested by: `%s`', (string) ($preSummary['requestedByUid'] ?? '')),
             '',
             '## Counts',
@@ -2186,7 +2552,7 @@ class OrganizationBackupService
             '',
             sprintf('- Status: `%s`', (string) ($subscription['status'] ?? 'n/a')),
             sprintf('- Plan: `%s`', (string) ($plan['name'] ?? ($subscription['plan_id'] ?? 'n/a'))),
-            sprintf('- Ends at: `%s`', (string) ($subscription['ended_at'] ?? 'n/a')),
+            sprintf('- Ends at: `%s`', $this->formatReadableDateTimeValue($subscription['ended_at'] ?? 'n/a')),
             '',
             '## Projects',
             '',
@@ -2208,11 +2574,11 @@ class OrganizationBackupService
                 );
             }
             if (count($projects) > 10) {
-                $lines[] = sprintf('- ...and %d more projects in `db/projectcreator/custom_projects.csv`.', count($projects) - 10);
+                $lines[] = sprintf('- ...and %d more projects in `readable/projects/index.csv`.', count($projects) - 10);
             }
         }
-        $lines[] = '- Public notes: `db/projectcreator/project_notes_public.csv`';
-        $lines[] = '- Private notes: `db/projectcreator/project_notes_private.csv`';
+        $lines[] = '- Each project has its own readable folder under `readable/projects/`.';
+        $lines[] = '- Notes are merged into `notes.csv`, and times are formatted for easier reading.';
 
         $lines[] = '';
         $lines[] = '## Deck';
@@ -2225,7 +2591,7 @@ class OrganizationBackupService
                 $lines[] = sprintf('- ...and %d more boards in `deck/boards/`.', count($deckBoards) - 10);
             }
         }
-        $lines[] = '- Readable Deck table exports are available in `deck/*.csv`.';
+        $lines[] = '- Readable Deck card exports are grouped per project in `readable/projects/*/deck_cards.csv`.';
 
         $lines[] = '';
         $lines[] = '## Files';
@@ -2245,7 +2611,7 @@ class OrganizationBackupService
                 );
             }
             if (count($fileInventory) > 10) {
-                $lines[] = sprintf('- ...and %d more files in `files/file_inventory.csv`.', count($fileInventory) - 10);
+                $lines[] = sprintf('- ...and %d more files in the per-project `files.csv` exports.', count($fileInventory) - 10);
             }
         }
 
@@ -2270,10 +2636,15 @@ class OrganizationBackupService
                 if (!is_array($entry)) {
                     continue;
                 }
-                $lines[] = sprintf('- `%s` (fileId: %s)', (string) ($entry['path'] ?? 'unknown'), (string) ($entry['fileId'] ?? 'n/a'));
+                $lines[] = sprintf(
+                    '- `%s` (fileId: %s, project %s)',
+                    (string) ($entry['path'] ?? 'unknown'),
+                    (string) ($entry['fileId'] ?? 'n/a'),
+                    (string) ($entry['projectId'] ?? 'n/a'),
+                );
             }
             if (count($deletedFiles) > 10) {
-                $lines[] = sprintf('- ...and %d more deleted files in `changes/deleted_files.csv`.', count($deletedFiles) - 10);
+                $lines[] = sprintf('- ...and %d more deleted files in the per-project `deleted_files.csv` exports.', count($deletedFiles) - 10);
             }
         }
 
@@ -2321,6 +2692,7 @@ class OrganizationBackupService
                 continue;
             }
             $index[$fileId] = [
+                'projectId' => isset($row['project_id']) ? (int) $row['project_id'] : 0,
                 'path' => (string) ($row['path'] ?? ''),
                 'etag' => (string) ($row['etag'] ?? ''),
                 'mtime' => isset($row['mtime']) ? (int) $row['mtime'] : 0,

@@ -1011,7 +1011,11 @@ class OrganizationRollbackService
                 ->executeQuery();
             $result->closeCursor();
             return true;
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            $this->logger->warning('Rollback table availability check failed', [
+                'table' => $table,
+                'exception' => $e,
+            ]);
             return false;
         }
     }
