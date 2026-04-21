@@ -1005,7 +1005,7 @@ class OrganizationRollbackService
     {
         try {
             $qb = $this->db->getQueryBuilder();
-            $result = $qb->select('1')
+            $result = $qb->select($qb->createFunction('1'))
                 ->from($table)
                 ->setMaxResults(1)
                 ->executeQuery();
