@@ -243,6 +243,28 @@
 							<span>{{ formatDate(job.createdAt) }}</span>
 						</div>
 						<div v-if="job.errorMessage" class="rollback-error">{{ job.errorMessage }}</div>
+						<div v-if="hasRollbackValidationSummary(job)" class="rollback-validation">
+							<div class="rollback-validation-status" :class="{ blocked: job.result?.canApply === false, ready: job.result?.canApply === true }">
+								{{ job.result?.canApply === true ? 'Validation passed' : 'Validation blocked' }}
+							</div>
+							<div v-if="rollbackValidationErrors(job).length" class="rollback-validation-section">
+								<div class="rollback-validation-label">Validation errors</div>
+								<ul class="rollback-validation-list">
+									<li v-for="message in rollbackValidationErrors(job)" :key="message">{{ message }}</li>
+								</ul>
+							</div>
+							<div v-if="rollbackWarnings(job).length" class="rollback-validation-section">
+								<div class="rollback-validation-label">Warnings</div>
+								<ul class="rollback-validation-list warnings">
+									<li v-for="message in rollbackWarnings(job)" :key="message">{{ message }}</li>
+								</ul>
+							</div>
+							<div v-if="rollbackImpactEntries(job).length" class="rollback-impact">
+								<span v-for="[key, value] in rollbackImpactEntries(job)" :key="key" class="rollback-impact-chip">
+									{{ formatImpactKey(key) }}: {{ value }}
+								</span>
+							</div>
+						</div>
 					</div>
 					<div class="rollback-actions">
 						<NcButton
@@ -301,6 +323,17 @@ import TimelineText from 'vue-material-design-icons/TimelineText.vue'
 const props = defineProps<{
 	organization: any
 }>()
+
+type RollbackResult = {
+	canApply?: boolean
+	validationErrors?: unknown
+	warnings?: unknown
+	impact?: unknown
+}
+
+type RollbackJobSummary = {
+	result?: RollbackResult | null
+}
 
 const initialLoading = ref(true)
 const creating = ref(false)
@@ -364,6 +397,37 @@ function formatFileSize(bytes: number): string {
 	const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
 	const i = Math.floor(Math.log(bytes) / Math.log(k))
 	return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+}
+
+function rollbackValidationErrors(job: RollbackJobSummary): string[] {
+	return Array.isArray(job?.result?.validationErrors) ? job.result.validationErrors.filter((value: unknown): value is string => typeof value === 'string' && value.trim().length > 0) : []
+}
+
+function rollbackWarnings(job: RollbackJobSummary): string[] {
+	return Array.isArray(job?.result?.warnings) ? job.result.warnings.filter((value: unknown): value is string => typeof value === 'string' && value.trim().length > 0) : []
+}
+
+function rollbackImpactEntries(job: RollbackJobSummary): Array<[string, string | number]> {
+	const impact = job?.result?.impact
+	if (!impact || typeof impact !== 'object' || Array.isArray(impact)) {
+		return []
+	}
+
+	return Object.entries(impact)
+		.filter(([, value]) => typeof value === 'number' || typeof value === 'string')
+		.map(([key, value]) => [key, value as string | number])
+}
+
+function hasRollbackValidationSummary(job: RollbackJobSummary): boolean {
+	return typeof job?.result?.canApply === 'boolean'
+		|| rollbackValidationErrors(job).length > 0
+		|| rollbackWarnings(job).length > 0
+		|| rollbackImpactEntries(job).length > 0
+}
+
+function formatImpactKey(key: string): string {
+	const withSpaces = key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim()
+	return withSpaces.charAt(0).toUpperCase() + withSpaces.slice(1)
 }
 
 async function fetchJobs() {
@@ -1195,6 +1259,64 @@ onBeforeUnmount(() => {
 	margin-top: 4px;
 	font-size: 0.78rem;
 	color: var(--color-error);
+}
+
+.rollback-validation {
+	margin-top: 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.rollback-validation-status {
+	font-size: 0.78rem;
+	font-weight: 600;
+	color: var(--color-text-maxcontrast);
+}
+
+.rollback-validation-status.blocked {
+	color: var(--color-error);
+}
+
+.rollback-validation-status.ready {
+	color: var(--color-success);
+}
+
+.rollback-validation-section {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.rollback-validation-label {
+	font-size: 0.76rem;
+	font-weight: 600;
+	color: var(--color-text-maxcontrast);
+}
+
+.rollback-validation-list {
+	margin: 0;
+	padding-left: 18px;
+	font-size: 0.78rem;
+	color: var(--color-error);
+}
+
+.rollback-validation-list.warnings {
+	color: var(--color-text-maxcontrast);
+}
+
+.rollback-impact {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.rollback-impact-chip {
+	border-radius: 999px;
+	padding: 3px 8px;
+	font-size: 0.75rem;
+	background: var(--color-background-dark);
+	color: var(--color-main-text);
 }
 
 @media (max-width: 600px) {

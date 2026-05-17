@@ -229,6 +229,7 @@ class OrganizationRollbackService
         ]);
 
         $tmpZipPath = null;
+        $validationFailureResult = null;
         try {
             $organizationId = (int) $job['organization_id'];
             $sourceBackupJobId = (int) $job['source_backup_job_id'];
@@ -264,6 +265,7 @@ class OrganizationRollbackService
                 $this->markStepSkipped($jobId, 'restore_files', ['reason' => 'dry-run mode']);
             } else {
                 if (($preview['canApply'] ?? false) !== true) {
+                    $validationFailureResult = $this->buildApplyValidationFailureResult($preview, $mode, $sourceBackupJobId);
                     throw new \RuntimeException('Dry-run validation failed; rollback apply is blocked');
                 }
 
@@ -346,15 +348,19 @@ class OrganizationRollbackService
             return $this->mapJobRow($jobRow, true);
         } catch (\Throwable $e) {
             $failedAt = $this->utcNow();
+            $errorResultJson = $validationFailureResult !== null ? json_encode($validationFailureResult, JSON_THROW_ON_ERROR) : null;
+            $eventPayload = ['error' => $e->getMessage()];
+            if ($validationFailureResult !== null) {
+                $eventPayload = array_merge($eventPayload, $this->buildApplyValidationFailureEventPayload($validationFailureResult));
+            }
             $this->updateJob($jobId, [
                 'status' => 'failed',
+                'result_json' => $errorResultJson,
                 'error_message' => $e->getMessage(),
                 'finished_at' => $failedAt,
                 'updated_at' => $failedAt,
             ]);
-            $this->insertEvent($jobId, 'error', 'Rollback failed', [
-                'error' => $e->getMessage(),
-            ]);
+            $this->insertEvent($jobId, 'error', 'Rollback failed', $eventPayload);
 
             $this->logger->error('Organization rollback failed', [
                 'exception' => $e,
@@ -838,9 +844,14 @@ class OrganizationRollbackService
                 continue;
             }
 
-            $folder = $this->resolveProjectSharedFolder($projectRowsById[(int) $projectId]);
+            $project = $projectRowsById[(int) $projectId];
+            $folder = $this->resolveProjectSharedFolder($project);
             if ($folder === null) {
-                $errors[] = sprintf('Shared folder is not resolvable for project %d', (int) $projectId);
+                if ($this->canProvisionProjectSharedFolder($project)) {
+                    $warnings[] = sprintf('Shared folder will be recreated for project %d', (int) $projectId);
+                } else {
+                    $errors[] = sprintf('Shared folder is not resolvable for project %d', (int) $projectId);
+                }
                 continue;
             }
 
@@ -887,6 +898,44 @@ class OrganizationRollbackService
                 'projectNotesPublic' => is_array($db['projectNotesPublic'] ?? null) ? count($db['projectNotesPublic']) : 0,
                 'projectNotesPrivate' => is_array($db['projectNotesPrivate'] ?? null) ? count($db['projectNotesPrivate']) : 0,
             ],
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $preview
+     * @return array<string,mixed>
+     */
+    private function buildApplyValidationFailureResult(array $preview, string $mode, int $sourceBackupJobId): array
+    {
+        return [
+            'mode' => $mode,
+            'sourceBackupJobId' => $sourceBackupJobId,
+            'canApply' => (bool) ($preview['canApply'] ?? false),
+            'validationErrors' => array_values(array_filter(
+                is_array($preview['errors'] ?? null) ? $preview['errors'] : [],
+                static fn ($value): bool => is_string($value) && trim($value) !== '',
+            )),
+            'warnings' => array_values(array_filter(
+                is_array($preview['warnings'] ?? null) ? $preview['warnings'] : [],
+                static fn ($value): bool => is_string($value) && trim($value) !== '',
+            )),
+            'impact' => is_array($preview['impact'] ?? null) ? $preview['impact'] : [],
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $result
+     * @return array<string,mixed>
+     */
+    private function buildApplyValidationFailureEventPayload(array $result): array
+    {
+        return [
+            'mode' => (string) ($result['mode'] ?? self::MODE_APPLY),
+            'sourceBackupJobId' => (int) ($result['sourceBackupJobId'] ?? 0),
+            'canApply' => (bool) ($result['canApply'] ?? false),
+            'validationErrors' => is_array($result['validationErrors'] ?? null) ? $result['validationErrors'] : [],
+            'warnings' => is_array($result['warnings'] ?? null) ? $result['warnings'] : [],
+            'impact' => is_array($result['impact'] ?? null) ? $result['impact'] : [],
         ];
     }
 
@@ -1416,10 +1465,11 @@ class OrganizationRollbackService
                 }
 
                 $project = $projectRowsById[$projectId];
-                $folder = $this->resolveProjectSharedFolder($project);
+                $folder = $this->resolveProjectSharedFolder($project, true);
                 if ($folder === null) {
                     throw new \RuntimeException(sprintf('Shared folder is not resolvable for project %d', $projectId));
                 }
+                $this->syncRestoredProjectFolderMetadata($projectId, $project, $folder);
 
                 $this->clearFolderContents($folder);
                 foreach ($entries as $entry) {
@@ -1523,7 +1573,7 @@ class OrganizationRollbackService
     /**
      * @param array<string,mixed> $project
      */
-    private function resolveProjectSharedFolder(array $project): ?\OCP\Files\Folder
+    private function resolveProjectSharedFolder(array $project, bool $createIfMissing = false): ?\OCP\Files\Folder
     {
         $folderId = isset($project['folder_id']) ? (int) $project['folder_id'] : 0;
         if ($folderId > 0) {
@@ -1536,7 +1586,7 @@ class OrganizationRollbackService
         }
 
         $ownerId = trim((string) ($project['owner_id'] ?? ''));
-        $folderPath = trim((string) ($project['folder_path'] ?? ''));
+        $folderPath = $this->determineProjectRestoreFolderPath($project);
         if ($ownerId === '' || $folderPath === '') {
             return null;
         }
@@ -1548,9 +1598,89 @@ class OrganizationRollbackService
                 return $node;
             }
         } catch (\Throwable) {
+            if (!$createIfMissing) {
+                return null;
+            }
+        }
+
+        if (!$createIfMissing) {
+            return null;
+        }
+
+        try {
+            $userFolder = $this->rootFolder->getUserFolder($ownerId);
+            return $this->ensureRelativeFolder($userFolder, $folderPath);
+        } catch (\Throwable) {
         }
 
         return null;
+    }
+
+    /**
+     * @param array<string,mixed> $project
+     */
+    private function canProvisionProjectSharedFolder(array $project): bool
+    {
+        $ownerId = trim((string) ($project['owner_id'] ?? ''));
+        $folderPath = $this->determineProjectRestoreFolderPath($project);
+        if ($ownerId === '' || $folderPath === '') {
+            return false;
+        }
+
+        try {
+            $this->rootFolder->getUserFolder($ownerId);
+            return true;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $project
+     */
+    private function determineProjectRestoreFolderPath(array $project): string
+    {
+        $folderPath = trim((string) ($project['folder_path'] ?? ''), '/');
+        if ($folderPath !== '') {
+            return $folderPath;
+        }
+
+        return trim((string) ($project['name'] ?? ''));
+    }
+
+    private function ensureRelativeFolder(\OCP\Files\Folder $baseFolder, string $relativePath): \OCP\Files\Folder
+    {
+        $segments = array_values(array_filter(
+            array_map(
+                static fn (string $segment): string => trim(str_replace("\0", '', $segment)),
+                explode('/', trim($relativePath, '/')),
+            ),
+            static fn (string $segment): bool => $segment !== '',
+        ));
+
+        $folder = $baseFolder;
+        foreach ($segments as $segment) {
+            $folder = $this->ensureChildFolder($folder, $segment);
+        }
+
+        return $folder;
+    }
+
+    /**
+     * @param array<string,mixed> $project
+     */
+    private function syncRestoredProjectFolderMetadata(int $projectId, array $project, \OCP\Files\Folder $folder): void
+    {
+        $values = [
+            'folder_id' => (int) $folder->getId(),
+        ];
+
+        $folderPath = $this->determineProjectRestoreFolderPath($project);
+        if ($folderPath !== '') {
+            $values['folder_path'] = $folderPath;
+        }
+
+        $this->updateById('custom_projects', $projectId, $values);
     }
 
     /**
