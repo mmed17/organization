@@ -43,6 +43,12 @@
 				:active="selectedId === org.id"
 				@click="$emit('select', org)"
 				:force-display-actions="true">
+				<template #name>
+					<span class="org-name-wrapper">
+						{{ org.displayname }}
+						<span v-if="org.type === 'trial'" class="trial-badge">Trial</span>
+					</span>
+				</template>
 				<template #icon>
 					<NcAvatar
 						:display-name="org.displayname"
@@ -148,6 +154,24 @@ const filteredOrganizations = computed(() => {
 	display: flex;
 	align-items: center;
 	justify-content: center;
+}
+
+.org-name-wrapper {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.trial-badge {
+	padding: 1px 7px;
+	border-radius: 999px;
+	background: var(--color-primary);
+	color: var(--color-primary-text);
+	font-size: 0.65rem;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	line-height: 1.4;
 }
 
 .status-dot {

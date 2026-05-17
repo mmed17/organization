@@ -39,6 +39,7 @@ return [
         ['root' => '/apps/organization', 'name' => 'Backup#listRollbackEvents', 'url' => '/organizations/{organizationId}/backups/rollback-jobs/{jobId}/events', 'verb' => 'GET'],
         ['root' => '/apps/organization', 'name' => 'Organization#createOrganization', 'url' => '/organizations', 'verb' => 'POST'],
         ['root' => '/apps/organization', 'name' => 'Organization#updateSubscription', 'url' => '/organizations/{organizationId}/subscription', 'verb' => 'PUT'],
+        ['root' => '/apps/organization', 'name' => 'Organization#convertTrialToStandard', 'url' => '/organizations/{organizationId}/convert-trial', 'verb' => 'POST'],
 
         // Plans
         ['root' => '/apps/organization', 'name' => 'Plan#getPlans', 'url' => '/plans', 'verb' => 'GET'],
@@ -46,6 +47,9 @@ return [
         ['root' => '/apps/organization', 'name' => 'Plan#createPlan', 'url' => '/plans', 'verb' => 'POST'],
         ['root' => '/apps/organization', 'name' => 'Plan#updatePlan', 'url' => '/plans/{planId}', 'verb' => 'PUT'],
         ['root' => '/apps/organization', 'name' => 'Plan#deletePlan', 'url' => '/plans/{planId}', 'verb' => 'DELETE'],
+
+        // Admin Settings
+        ['root' => '/apps/organization', 'name' => 'AdminSettings#saveTrialSettings', 'url' => '/admin/settings/trial', 'verb' => 'PUT'],
 
     ],
 ];

@@ -16,9 +16,14 @@ use OCP\IRequest;
 use OCP\IUserManager;
 use OCP\IUserSession;
 
+use DateInterval;
+use DateTime;
+use DateTimeZone;
+
 use OCA\Organization\Db\Organization;
 use OCA\Organization\Db\OrganizationMapper;
 use OCA\Organization\Db\PlanMapper;
+use OCA\Organization\Db\SubscriptionHistoryMapper;
 use OCA\Organization\Db\SubscriptionMapper;
 use OCA\Organization\Db\UserMapper;
 use OCA\Organization\Service\AccountHandoverService;
@@ -26,6 +31,7 @@ use OCA\Organization\Service\NotificationService;
 use OCA\Organization\Service\OrganizationAdminService;
 use OCA\Organization\Service\OrganizationService;
 use OCA\Organization\Service\SubscriptionService;
+use OCA\Organization\Service\TrialOrganizationService;
 
 use Exception;
 use Psr\Log\LoggerInterface;
@@ -45,6 +51,8 @@ class OrganizationController extends OCSController
         private AccountHandoverService $accountHandoverService,
         private NotificationService $notificationService,
         private SubscriptionService $subscriptionService,
+        private TrialOrganizationService $trialOrganizationService,
+        private SubscriptionHistoryMapper $subscriptionHistoryMapper,
         private IUserManager $userManager,
         private IGroupManager $groupManager,
         private IUserSession $userSession,
@@ -80,6 +88,7 @@ class OrganizationController extends OCSController
                 'canAdd' => true,
                 'canRemove' => true,
                 'isOrganization' => true,
+                'type' => $row['type'] ?? 'standard',
                 'adminUid' => $row['admin_uid'] ?? null,
                 'subscription' => [
                     'id' => $row['subscription_id'],
@@ -541,8 +550,23 @@ class OrganizationController extends OCSController
         ?string $adminUserId = null,
         ?string $adminPassword = null,
         ?string $adminDisplayName = null,
-        ?string $adminEmail = null
+        ?string $adminEmail = null,
+        bool $trial = false,
     ): DataResponse {
+        if ($trial) {
+            return $this->createTrialOrganization(
+                $displayname,
+                $contactFirstName,
+                $contactLastName,
+                $contactEmail,
+                $contactPhone,
+                $adminUserId,
+                $adminPassword,
+                $adminDisplayName,
+                $adminEmail,
+            );
+        }
+
         $adminCreated = false;
 
         try {
@@ -610,6 +634,70 @@ class OrganizationController extends OCSController
     }
 
     /**
+     * Creates a trial organization with pre-configured limits and duration.
+     */
+    private function createTrialOrganization(
+        ?string $displayname,
+        ?string $contactFirstName,
+        ?string $contactLastName,
+        ?string $contactEmail,
+        ?string $contactPhone,
+        ?string $adminUserId,
+        ?string $adminPassword,
+        ?string $adminDisplayName,
+        ?string $adminEmail,
+    ): DataResponse {
+        if ($adminUserId === null || trim($adminUserId) === '' || $adminPassword === null || trim($adminPassword) === '') {
+            throw new OCSException('Organization admin user ID and password are required', 104);
+        }
+
+        try {
+            $this->db->beginTransaction();
+
+            $result = $this->trialOrganizationService->createTrialOrganization(
+                $displayname ?? '',
+                $contactFirstName,
+                $contactLastName,
+                $contactEmail,
+                $contactPhone,
+                $adminUserId,
+                $adminPassword,
+                $adminDisplayName,
+                $adminEmail,
+            );
+
+            $this->db->commit();
+
+            try {
+                $organization = $result['organization'];
+                $this->notificationService->notifyOrganizationMemberAdded(
+                    $organization->getId(),
+                    $organization->getName(),
+                    trim($adminUserId),
+                    $adminDisplayName,
+                    $this->userSession->getUser()?->getUID(),
+                );
+            } catch (\Exception $e) {
+                $this->logger->error('Failed to send trial creation notification', [
+                    'exception' => $e,
+                    'organizationId' => $organization->getId(),
+                ]);
+            }
+
+            return new DataResponse($result);
+        } catch (\Exception $e) {
+            $this->db->rollBack();
+            if ($adminUserId !== null) {
+                $createdUser = $this->userManager->get(trim($adminUserId));
+                if ($createdUser !== null) {
+                    $createdUser->delete();
+                }
+            }
+            throw new OCSException('Failed to create trial organization: ' . $e->getMessage(), 104);
+        }
+    }
+
+    /**
      * Update an organization's subscription.
      *
      * @param int $organizationId The organization ID
@@ -667,6 +755,79 @@ class OrganizationController extends OCSController
                 throw $e;
             }
             throw new OCSException('Failed to update organization: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Converts a trial organization to a standard organization with a new plan and subscription.
+     */
+    #[PasswordConfirmationRequired]
+    public function convertTrialToStandard(
+        int $organizationId,
+        int $planId,
+        string $validity,
+        ?string $adminUserId = null,
+    ): DataResponse {
+        $this->assertCanManageOrganization($organizationId, true);
+
+        $organization = $this->organizationMapper->find($organizationId);
+        if ($organization === null) {
+            throw new OCSNotFoundException('Organization does not exist');
+        }
+
+        if ($organization->getType() !== 'trial') {
+            throw new OCSException('Only trial organizations can be converted', 104);
+        }
+
+        $this->db->beginTransaction();
+        try {
+            $organization->setType('standard');
+            $this->organizationMapper->update($organization);
+
+            $subscription = $this->subscriptionMapper->findByOrganizationId($organizationId);
+            if ($subscription === null) {
+                throw new OCSNotFoundException('No subscription found for this organization');
+            }
+
+            $previousSubscription = clone $subscription;
+
+            $now = new DateTime('now', new DateTimeZone('UTC'));
+            $validityDuration = DateInterval::createFromDateString($validity);
+            if ($validityDuration === false) {
+                throw new OCSException('Invalid validity duration', 104);
+            }
+            $endedAt = (clone $now)->add($validityDuration);
+
+            $subscription->setPlanId($planId);
+            $subscription->setStatus('active');
+            $subscription->setStartedAt($now->format('Y-m-d H:i:s'));
+            $subscription->setEndedAt($endedAt->format('Y-m-d H:i:s'));
+            $subscription->setPausedAt(null);
+            $subscription->setCancelledAt(null);
+            $this->subscriptionMapper->update($subscription);
+
+            $this->subscriptionHistoryMapper->createLog(
+                $subscription,
+                $previousSubscription,
+                $adminUserId ?? $this->userSession->getUser()?->getUID() ?? 'system',
+            );
+
+            $this->db->commit();
+
+            return new DataResponse([
+                'organization' => $organization,
+                'subscription' => $subscription,
+            ]);
+        } catch (Exception $e) {
+            $this->db->rollBack();
+            $this->logger->error('Failed to convert trial organization', [
+                'exception' => $e,
+                'organizationId' => $organizationId,
+            ]);
+            if ($e instanceof OCSNotFoundException) {
+                throw $e;
+            }
+            throw new OCSException('Failed to convert trial organization: ' . $e->getMessage());
         }
     }
 

@@ -6,6 +6,17 @@
 		class="create-org-modal"
 		@close="closeModal">
 		<div class="modal-content">
+			<div class="trial-toggle-row">
+				<label class="trial-checkbox-label">
+					<input type="checkbox" :checked="newOrg.isTrial" @change="onTrialToggle" />
+					<span>Create as Trial Organization</span>
+				</label>
+				<div v-if="newOrg.isTrial" class="trial-summary">
+					<span class="trial-chip">Trial</span>
+					<span>7 days &middot; 3 members &middot; 1 project &middot; 100MB storage</span>
+				</div>
+			</div>
+
 			<div class="modal-body-grid">
 				<!-- Left Column: Identity & Contact -->
 				<div class="grid-column">
@@ -91,63 +102,65 @@
 
 				<!-- Right Column: Plan & Limits -->
 				<div class="grid-column">
-					<!-- Subscription Plan -->
-					<div class="form-section">
-						<div class="section-header">
-							<Briefcase :size="20" class="section-icon" />
-							<h3>Billing & Plan</h3>
-						</div>
-						<div class="section-body">
-							<div class="form-row">
-								<label class="nc-label-text">Subscription Plan</label>
-								<div class="select-wrapper">
-									<select v-model="newOrg.planId" class="nc-select-native" @change="onPlanChange">
-										<option :value="null">Custom Plan</option>
-										<option v-for="plan in plans" :key="plan.id" :value="plan.id">
-											{{ plan.name }}
-										</option>
-									</select>
+					<template v-if="!newOrg.isTrial">
+						<!-- Subscription Plan -->
+						<div class="form-section">
+							<div class="section-header">
+								<Briefcase :size="20" class="section-icon" />
+								<h3>Billing & Plan</h3>
+							</div>
+							<div class="section-body">
+								<div class="form-row">
+									<label class="nc-label-text">Subscription Plan</label>
+									<div class="select-wrapper">
+										<select v-model="newOrg.planId" class="nc-select-native" @change="onPlanChange">
+											<option :value="null">Custom Plan</option>
+											<option v-for="plan in plans" :key="plan.id" :value="plan.id">
+												{{ plan.name }}
+											</option>
+										</select>
+									</div>
+								</div>
+								<div class="form-row">
+									<label class="nc-label-text">Validity Period</label>
+									<div class="select-wrapper">
+										<select v-model="newOrg.validity" class="nc-select-native">
+											<option value="1 month">1 Month</option>
+											<option value="1 year">1 Year</option>
+										</select>
+									</div>
 								</div>
 							</div>
-							<div class="form-row">
-								<label class="nc-label-text">Validity Period</label>
-								<div class="select-wrapper">
-									<select v-model="newOrg.validity" class="nc-select-native">
-										<option value="1 month">1 Month</option>
-										<option value="1 year">1 Year</option>
-									</select>
-								</div>
-							</div>
 						</div>
-					</div>
 
-					<!-- Resource Allocation -->
-					<div class="form-section">
-						<div class="section-header">
-							<Database :size="20" class="section-icon" />
-							<h3>Resource Allocation</h3>
+						<!-- Resource Allocation -->
+						<div class="form-section">
+							<div class="section-header">
+								<Database :size="20" class="section-icon" />
+								<h3>Resource Allocation</h3>
+							</div>
+							<div class="section-body grid-2-tight">
+								<NcTextField
+									v-model.number="newOrg.memberLimit"
+									label="Max Members"
+									type="number" />
+								<NcTextField
+									v-model.number="newOrg.projectsLimit"
+									label="Max Projects"
+									type="number" />
+								<NcTextField
+									v-model.number="sharedStorageGB"
+									label="Shared Storage (GB)"
+									type="number"
+									:min="0" />
+								<NcTextField
+									v-model.number="privateStorageGB"
+									label="Private Storage (GB)"
+									type="number"
+									:min="0" />
+							</div>
 						</div>
-						<div class="section-body grid-2-tight">
-							<NcTextField
-								v-model.number="newOrg.memberLimit"
-								label="Max Members"
-								type="number" />
-							<NcTextField
-								v-model.number="newOrg.projectsLimit"
-								label="Max Projects"
-								type="number" />
-							<NcTextField
-								v-model.number="sharedStorageGB"
-								label="Shared Storage (GB)"
-								type="number"
-								:min="0" />
-							<NcTextField
-								v-model.number="privateStorageGB"
-								label="Private Storage (GB)"
-								type="number"
-								:min="0" />
-						</div>
-					</div>
+					</template>
 				</div>
 			</div>
 
@@ -211,10 +224,15 @@ const defaultNewOrg = {
 	sharedStoragePerProject: 1073741824, // 1GB
 	privateStorage: 5368709120, // 5GB
 	price: 0,
-	currency: 'EUR'
+	currency: 'EUR',
+	isTrial: false,
 }
 
 const newOrg = reactive({ ...defaultNewOrg })
+
+const onTrialToggle = (e: Event) => {
+	newOrg.isTrial = (e.target as HTMLInputElement).checked
+}
 
 // Computed properties for storage conversion (Bytes <-> GB)
 const sharedStorageGB = computed({
@@ -253,7 +271,7 @@ const onPlanChange = () => {
 	}
 }
 
-const handleCreate = async () => {
+	const handleCreate = async () => {
 	errors.displayname = !newOrg.displayname ? 'Name is required' : ''
 	errors.adminUserId = !newOrg.adminUserId ? 'Admin user ID is required' : ''
 	errors.adminPassword = !newOrg.adminPassword ? 'Admin password is required' : ''
@@ -263,7 +281,11 @@ const handleCreate = async () => {
 	submitting.value = true
 	try {
 		await confirmPassword()
-		await axios.post(generateOcsUrl('apps/organization/organizations'), newOrg)
+		const payload = { ...newOrg }
+		if (payload.isTrial) {
+			payload.trial = true
+		}
+		await axios.post(generateOcsUrl('apps/organization/organizations'), payload)
 		emit('success')
 		closeModal()
 	} catch (error) {
@@ -280,6 +302,50 @@ const handleCreate = async () => {
 	flex-direction: column;
 	gap: 24px;
 	padding: 8px 4px;
+}
+
+.trial-toggle-row {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	padding: 12px 16px;
+	background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+	border: 1px solid color-mix(in srgb, var(--color-primary) 25%, var(--color-border));
+	border-radius: var(--border-radius-large);
+}
+
+.trial-summary {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 0.85rem;
+	color: var(--color-text-light);
+}
+
+.trial-checkbox-label {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	cursor: pointer;
+	font-weight: 600;
+	user-select: none;
+}
+
+.trial-checkbox-label input[type="checkbox"] {
+	width: 18px;
+	height: 18px;
+	cursor: pointer;
+}
+
+.trial-chip {
+	padding: 2px 8px;
+	border-radius: 999px;
+	background: var(--color-primary);
+	color: var(--color-primary-text);
+	font-size: 0.7rem;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
 }
 
 /* Grid Layout */

@@ -19,6 +19,8 @@ use OCP\DB\Types;
  * @method void setContactPhone(?string $contactPhone)
  * @method string|null getAdminUid()
  * @method void setAdminUid(?string $adminUid)
+ * @method string getType()
+ * @method void setType(string $type)
  */
 class Organization extends Entity implements \JsonSerializable
 {
@@ -41,6 +43,9 @@ class Organization extends Entity implements \JsonSerializable
     /** @var string|null User ID of the organization admin. */
     public ?string $adminUid = null;
 
+    /** @var string The type of organization: 'standard' or 'trial'. */
+    public ?string $type = 'standard';
+
     public function __construct()
     {
         $this->addType('name', Types::STRING);
@@ -49,6 +54,7 @@ class Organization extends Entity implements \JsonSerializable
         $this->addType('contactEmail', Types::STRING);
         $this->addType('contactPhone', Types::STRING);
         $this->addType('adminUid', Types::STRING);
+        $this->addType('type', Types::STRING);
     }
 
     public function jsonSerialize(): array
@@ -61,6 +67,7 @@ class Organization extends Entity implements \JsonSerializable
             'contactEmail' => $this->contactEmail,
             'contactPhone' => $this->contactPhone,
             'adminUid' => $this->adminUid,
+            'type' => $this->type,
         ];
     }
 }

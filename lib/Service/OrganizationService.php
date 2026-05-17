@@ -31,6 +31,7 @@ class OrganizationService
         ?string $contactEmail = null,
         ?string $contactPhone = null,
         ?string $adminUid = null,
+        string $type = 'standard',
     ): Organization {
         $organization = new Organization();
         $organization->setName($name);
@@ -39,6 +40,7 @@ class OrganizationService
         $organization->setContactEmail($contactEmail);
         $organization->setContactPhone($contactPhone);
         $organization->setAdminUid($adminUid);
+        $organization->setType($type);
 
         return $this->organizationMapper->insert($organization);
     }

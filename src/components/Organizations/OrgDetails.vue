@@ -12,7 +12,10 @@
 						:disable-tooltip="true"
 						class="header-avatar" />
 					<div class="header-info">
-						<h2>{{ organization.displayname }}</h2>
+						<h2>
+							{{ organization.displayname }}
+							<span v-if="organization.type === 'trial'" class="trial-badge">Trial</span>
+						</h2>
 						<p class="header-subtitle">
 							<span class="id-badge">ID: {{ organization.id }}</span>
 						</p>
@@ -22,6 +25,16 @@
 					<div :class="['status-chip', organization.subscription.status]">
 						{{ organization.subscription.status }}
 					</div>
+					<NcButton
+						v-if="organization.type === 'trial' && isGlobalAdmin"
+						type="tertiary"
+						:disabled="converting"
+						@click="handleConvertToStandard">
+						<template #icon>
+							<ArrowRight :size="16" />
+						</template>
+						Convert to Standard
+					</NcButton>
 					<NcButton
 						v-if="canManageMembers"
 						type="tertiary"
@@ -256,13 +269,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import {
 	NcAppContentDetails,
 	NcLoadingIcon,
 	NcAvatar,
 	NcButton,
 } from '@nextcloud/vue'
+import { confirmPassword } from '@nextcloud/password-confirmation'
+import axios from '@nextcloud/axios'
+import { generateOcsUrl } from '@nextcloud/router'
 
 import OrganizationBackup from './OrganizationBackup.vue'
 
@@ -272,15 +288,44 @@ import CardAccountDetails from 'vue-material-design-icons/CardAccountDetails.vue
 import Pencil from 'vue-material-design-icons/Pencil.vue'
 import AccountPlus from 'vue-material-design-icons/AccountPlus.vue'
 import Download from 'vue-material-design-icons/Download.vue'
+import ArrowRight from 'vue-material-design-icons/ArrowRight.vue'
 
 const props = defineProps<{
 	organization: any
 	loading: boolean
 	canManageMembers: boolean
+	isGlobalAdmin: boolean
 	members: any[]
 }>()
 
 const emit = defineEmits(['edit-organization', 'manage-members', 'members-updated', 'organization-updated'])
+
+const converting = ref(false)
+
+const handleConvertToStandard = async () => {
+	if (!confirm('Convert this trial organization to a standard organization? This will keep all existing data.')) {
+		return
+	}
+
+	converting.value = true
+	try {
+		await confirmPassword()
+		const planId = prompt('Enter the plan ID to assign:')
+		if (!planId) return
+		const validity = prompt('Enter subscription validity (e.g. "1 year"):')
+		if (!validity) return
+
+		await axios.post(generateOcsUrl(`apps/organization/organizations/${props.organization.id}/convert-trial`), {
+			planId: parseInt(planId, 10),
+			validity,
+		})
+		emit('organization-updated', { type: 'standard' })
+	} catch (error) {
+		console.error('Failed to convert trial organization', error)
+	} finally {
+		converting.value = false
+	}
+}
 
 const contactFullName = computed(() => {
 	const first = props.organization.contactFirstName || ''
@@ -353,6 +398,19 @@ const formatFileSize = (bytes: number) => {
 	padding: 2px 6px;
 	border-radius: 4px;
 	font-size: 0.85em;
+}
+
+.trial-badge {
+	padding: 2px 10px;
+	border-radius: 999px;
+	background: var(--color-primary);
+	color: var(--color-primary-text);
+	font-size: 0.7rem;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	margin-left: 8px;
+	vertical-align: middle;
 }
 
 .header-actions {

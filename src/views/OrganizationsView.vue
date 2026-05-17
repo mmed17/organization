@@ -18,6 +18,7 @@
 				:organization="selectedOrganization"
 				:loading="loadingDetails"
 				:can-manage-members="permissions.isGlobalAdmin || permissions.isOrganizationAdmin"
+				:is-global-admin="permissions.isGlobalAdmin"
 				:members="selectedOrganization.members || []"
 				@edit-organization="showEditModal = true"
 				@manage-members="showMembersModal = true"

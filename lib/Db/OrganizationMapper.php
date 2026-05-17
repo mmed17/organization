@@ -136,6 +136,7 @@ class OrganizationMapper extends QBMapper
         $qb->select(
             'o.id',
             'o.name',
+            'o.type',
             'o.admin_uid',
             's.id as subscription_id',
             's.status as subscription_status',
@@ -170,6 +171,7 @@ class OrganizationMapper extends QBMapper
 
         $qb->groupBy('o.id')
             ->addGroupBy('o.name')
+            ->addGroupBy('o.type')
             ->addGroupBy('o.admin_uid')
             ->addGroupBy('s.id')
             ->addGroupBy('s.status')
