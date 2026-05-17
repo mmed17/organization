@@ -6,17 +6,6 @@
 		class="create-org-modal"
 		@close="closeModal">
 		<div class="modal-content">
-			<div class="trial-toggle-row">
-				<label class="trial-checkbox-label">
-					<input type="checkbox" :checked="newOrg.isTrial" @change="onTrialToggle" />
-					<span>Create as Trial Organization</span>
-				</label>
-				<div v-if="newOrg.isTrial" class="trial-summary">
-					<span class="trial-chip">Trial</span>
-					<span>7 days &middot; 3 members &middot; 1 project &middot; 100MB storage</span>
-				</div>
-			</div>
-
 			<div class="modal-body-grid">
 				<!-- Left Column: Identity & Contact -->
 				<div class="grid-column">
@@ -102,14 +91,24 @@
 
 				<!-- Right Column: Plan & Limits -->
 				<div class="grid-column">
-					<template v-if="!newOrg.isTrial">
-						<!-- Subscription Plan -->
-						<div class="form-section">
-							<div class="section-header">
-								<Briefcase :size="20" class="section-icon" />
-								<h3>Billing & Plan</h3>
+					<!-- Subscription Plan -->
+					<div class="form-section">
+						<div class="section-header">
+							<Briefcase :size="20" class="section-icon" />
+							<h3>Billing & Plan</h3>
+						</div>
+						<div class="section-body">
+							<div class="trial-checkbox-row">
+								<label class="trial-checkbox-label">
+									<input type="checkbox" :checked="newOrg.isTrial" @change="onTrialToggle" />
+									<span>Create as Trial Organization</span>
+								</label>
+								<div v-if="newOrg.isTrial" class="trial-summary">
+									<span class="trial-chip">Trial</span>
+									<span>7 days &middot; 3 members &middot; 1 project &middot; 100MB storage</span>
+								</div>
 							</div>
-							<div class="section-body">
+							<template v-if="!newOrg.isTrial">
 								<div class="form-row">
 									<label class="nc-label-text">Subscription Plan</label>
 									<div class="select-wrapper">
@@ -130,37 +129,37 @@
 										</select>
 									</div>
 								</div>
-							</div>
+							</template>
 						</div>
+					</div>
 
-						<!-- Resource Allocation -->
-						<div class="form-section">
-							<div class="section-header">
-								<Database :size="20" class="section-icon" />
-								<h3>Resource Allocation</h3>
-							</div>
-							<div class="section-body grid-2-tight">
-								<NcTextField
-									v-model.number="newOrg.memberLimit"
-									label="Max Members"
-									type="number" />
-								<NcTextField
-									v-model.number="newOrg.projectsLimit"
-									label="Max Projects"
-									type="number" />
-								<NcTextField
-									v-model.number="sharedStorageGB"
-									label="Shared Storage (GB)"
-									type="number"
-									:min="0" />
-								<NcTextField
-									v-model.number="privateStorageGB"
-									label="Private Storage (GB)"
-									type="number"
-									:min="0" />
-							</div>
+					<!-- Resource Allocation -->
+					<div v-if="!newOrg.isTrial" class="form-section">
+						<div class="section-header">
+							<Database :size="20" class="section-icon" />
+							<h3>Resource Allocation</h3>
 						</div>
-					</template>
+						<div class="section-body grid-2-tight">
+							<NcTextField
+								v-model.number="newOrg.memberLimit"
+								label="Max Members"
+								type="number" />
+							<NcTextField
+								v-model.number="newOrg.projectsLimit"
+								label="Max Projects"
+								type="number" />
+							<NcTextField
+								v-model.number="sharedStorageGB"
+								label="Shared Storage (GB)"
+								type="number"
+								:min="0" />
+							<NcTextField
+								v-model.number="privateStorageGB"
+								label="Private Storage (GB)"
+								type="number"
+								:min="0" />
+						</div>
+					</div>
 				</div>
 			</div>
 
@@ -304,11 +303,12 @@ const onPlanChange = () => {
 	padding: 8px 4px;
 }
 
-.trial-toggle-row {
+.trial-checkbox-row {
 	display: flex;
-	align-items: center;
-	gap: 16px;
+	flex-direction: column;
+	gap: 8px;
 	padding: 12px 16px;
+	margin-bottom: 12px;
 	background: color-mix(in srgb, var(--color-primary) 8%, transparent);
 	border: 1px solid color-mix(in srgb, var(--color-primary) 25%, var(--color-border));
 	border-radius: var(--border-radius-large);
