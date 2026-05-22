@@ -43,15 +43,14 @@
 						</div>
 
 						<div class="form-row">
-							<label for="trial-duration" class="nc-label-text">Trial Duration</label>
+							<label for="trial-duration" class="nc-label-text">Trial Duration (days)</label>
 							<input
 								id="trial-duration"
-								v-model="form.trial_duration"
-								type="text"
+								v-model.number="form.trial_duration"
+								type="number"
+								min="1"
 								class="nc-input"
-								required
-								placeholder="e.g. 7 days" />
-							<span class="field-desc">Duration parseable by PHP (e.g. "7 days", "14 days", "1 month").</span>
+								required />
 						</div>
 					</div>
 				</div>
@@ -157,7 +156,7 @@ const saving = ref(false)
 
 const form = ref({
 	trial_plan_name: '',
-	trial_duration: '',
+	trial_duration: 7,
 	trial_max_members: 3,
 	trial_max_projects: 1,
 	trial_shared_storage_gb: 0.1,
@@ -174,7 +173,7 @@ const fetchSettings = async () => {
 		const data = response.data.ocs.data
 		form.value = {
 			trial_plan_name: data.planName || 'Trial Plan',
-			trial_duration: data.duration || '7 days',
+			trial_duration: parseInt(data.duration) || 7,
 			trial_max_members: data.maxMembers ?? 3,
 			trial_max_projects: data.maxProjects ?? 1,
 			trial_shared_storage_gb: parseFloat(((data.sharedStoragePerProject || 0) / 1073741824).toFixed(3)),
@@ -194,7 +193,11 @@ const handleSave = async () => {
 	statusMessage.value = ''
 	try {
 		await confirmPassword()
-		const response = await axios.put(generateOcsUrl('apps/organization/admin/settings/trial'), form.value)
+		const payload = {
+			...form.value,
+			trial_duration: `${form.value.trial_duration} days`,
+		}
+		const response = await axios.put(generateOcsUrl('apps/organization/admin/settings/trial'), payload)
 		if (response.data?.ocs?.meta?.status === 'ok') {
 			statusType.value = 'success'
 			statusMessage.value = 'Trial settings saved successfully.'
