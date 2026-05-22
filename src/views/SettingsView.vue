@@ -307,7 +307,7 @@ onMounted(() => {
 }
 
 .settings-card {
-	background-color: var(--color-background-translucent);
+	background-color: var(--color-main-background);
 	border: 1px solid var(--color-border);
 	border-radius: var(--border-radius-large);
 	padding: 24px;
