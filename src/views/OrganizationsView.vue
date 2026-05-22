@@ -22,6 +22,7 @@
 				:members="selectedOrganization.members || []"
 				@edit-organization="showEditModal = true"
 				@manage-members="showMembersModal = true"
+				@convert-trial="showConvertModal = true"
 				@members-updated="onMembersUpdated"
 				@organization-updated="onOrganizationUpdated" />
 
@@ -54,6 +55,13 @@
 		:can-manage-members="permissions.isGlobalAdmin || permissions.isOrganizationAdmin"
 		@close="showMembersModal = false"
 		@members-updated="onMembersUpdated" />
+
+	<ConvertTrialModal
+		:show="showConvertModal"
+		:organization="selectedOrganization"
+		:plans="plans"
+		@close="showConvertModal = false"
+		@success="onOrganizationConverted" />
 </template>
 
 <script setup lang="ts">
@@ -69,6 +77,7 @@ import OrgDetails from '../components/Organizations/OrgDetails.vue'
 import CreateOrgModal from '../components/Organizations/CreateOrgModal.vue'
 import EditOrganizationModal from '../components/Organizations/EditOrganizationModal.vue'
 import ManageMembersModal from '../components/Organizations/ManageMembersModal.vue'
+import ConvertTrialModal from '../components/Organizations/ConvertTrialModal.vue'
 
 const organizations = ref([])
 const plans = ref([])
@@ -76,6 +85,7 @@ const loading = ref(true)
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
 const showMembersModal = ref(false)
+const showConvertModal = ref(false)
 const selectedOrganization = ref(null)
 const loadingDetails = ref(false)
 
@@ -192,6 +202,18 @@ const onOrganizationUpdated = (updatedOrg: any) => {
 			displayname: selectedOrganization.value.displayname,
 		}
 		: org)
+}
+
+const onOrganizationConverted = async () => {
+	await fetchOrganizations()
+	if (selectedOrganization.value) {
+		const updatedOrg = organizations.value.find((o: any) => o.id === selectedOrganization.value.id)
+		if (updatedOrg) {
+			await selectOrganization(updatedOrg)
+		} else {
+			await selectOrganization(selectedOrganization.value)
+		}
+	}
 }
 
 onMounted(() => {

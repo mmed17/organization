@@ -42,6 +42,7 @@ return [
         ['root' => '/apps/organization', 'name' => 'Organization#convertTrialToStandard', 'url' => '/organizations/{organizationId}/convert-trial', 'verb' => 'POST'],
 
         // Plans
+        // Plans
         ['root' => '/apps/organization', 'name' => 'Plan#getPlans', 'url' => '/plans', 'verb' => 'GET'],
         ['root' => '/apps/organization', 'name' => 'Plan#getPlan', 'url' => '/plans/{planId}', 'verb' => 'GET'],
         ['root' => '/apps/organization', 'name' => 'Plan#createPlan', 'url' => '/plans', 'verb' => 'POST'],
@@ -49,6 +50,7 @@ return [
         ['root' => '/apps/organization', 'name' => 'Plan#deletePlan', 'url' => '/plans/{planId}', 'verb' => 'DELETE'],
 
         // Admin Settings
+        ['root' => '/apps/organization', 'name' => 'AdminSettings#getTrialSettings', 'url' => '/admin/settings/trial', 'verb' => 'GET'],
         ['root' => '/apps/organization', 'name' => 'AdminSettings#saveTrialSettings', 'url' => '/admin/settings/trial', 'verb' => 'PUT'],
 
     ],

@@ -779,6 +779,11 @@ class OrganizationController extends OCSController
             throw new OCSException('Only trial organizations can be converted', 104);
         }
 
+        $plan = $this->planMapper->find($planId);
+        if ($plan === null) {
+            throw new OCSNotFoundException('Plan not found');
+        }
+
         $this->db->beginTransaction();
         try {
             $organization->setType('standard');

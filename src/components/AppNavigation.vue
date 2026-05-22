@@ -19,6 +19,15 @@
 				<CardAccountDetails :size="20" />
 			</template>
 		</NcAppNavigationItem>
+		<NcAppNavigationItem
+			v-if="showPlans"
+			:active="activeItem === 'settings'"
+			name="Trial Settings"
+			@click="$emit('update:activeItem', 'settings')">
+			<template #icon>
+				<Cog :size="20" />
+			</template>
+		</NcAppNavigationItem>
 	</NcAppNavigation>
 </template>
 
@@ -26,6 +35,7 @@
 import { NcAppNavigation, NcAppNavigationItem } from '@nextcloud/vue'
 import AccountGroup from 'vue-material-design-icons/AccountGroup.vue'
 import CardAccountDetails from 'vue-material-design-icons/CardAccountDetails.vue'
+import Cog from 'vue-material-design-icons/Cog.vue'
 
 defineProps<{
 	activeItem: string

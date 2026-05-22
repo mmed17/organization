@@ -11,6 +11,9 @@
 
 	<PlansView
 		v-else-if="activeItem === 'plans'" />
+
+	<SettingsView
+		v-else-if="activeItem === 'settings'" />
 </template>
 
 <script setup lang="ts">
@@ -19,6 +22,7 @@ import { loadState } from '@nextcloud/initial-state'
 import AppNavigation from './components/AppNavigation.vue'
 import OrganizationsView from './views/OrganizationsView.vue'
 import PlansView from './views/PlansView.vue'
+import SettingsView from './views/SettingsView.vue'
 
 const activeItem = ref('organizations')
 
@@ -35,7 +39,7 @@ const permissions = settings.permissions
 const modeLabel = computed(() => permissions.isGlobalAdmin ? 'Global Admin Mode' : 'Organization Admin Mode')
 
 const onNavigationChange = (item: string) => {
-	if (item === 'plans' && !permissions.isGlobalAdmin) {
+	if ((item === 'plans' || item === 'settings') && !permissions.isGlobalAdmin) {
 		activeItem.value = 'organizations'
 		return
 	}

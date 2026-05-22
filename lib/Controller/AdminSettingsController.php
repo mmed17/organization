@@ -11,6 +11,8 @@ use OCP\AppFramework\OCSController;
 use OCP\IConfig;
 use OCP\IRequest;
 
+use OCA\Organization\Service\TrialOrganizationService;
+
 use Psr\Log\LoggerInterface;
 
 class AdminSettingsController extends OCSController
@@ -20,8 +22,19 @@ class AdminSettingsController extends OCSController
 		IRequest $request,
 		private IConfig $config,
 		private LoggerInterface $logger,
+		private TrialOrganizationService $trialService,
 	) {
 		parent::__construct($appName, $request);
+	}
+
+	/**
+	 * Retrieve current trial settings.
+	 *
+	 * @return DataResponse
+	 */
+	public function getTrialSettings(): DataResponse
+	{
+		return new DataResponse($this->trialService->getAllSettings());
 	}
 
 	/**

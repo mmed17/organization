@@ -28,8 +28,7 @@
 					<NcButton
 						v-if="organization.type === 'trial' && isGlobalAdmin"
 						type="tertiary"
-						:disabled="converting"
-						@click="handleConvertToStandard">
+						@click="$emit('convert-trial')">
 						<template #icon>
 							<ArrowRight :size="16" />
 						</template>
@@ -276,10 +275,6 @@ import {
 	NcAvatar,
 	NcButton,
 } from '@nextcloud/vue'
-import { confirmPassword } from '@nextcloud/password-confirmation'
-import axios from '@nextcloud/axios'
-import { generateOcsUrl } from '@nextcloud/router'
-
 import OrganizationBackup from './OrganizationBackup.vue'
 
 import AccountGroup from 'vue-material-design-icons/AccountGroup.vue'
@@ -298,34 +293,7 @@ const props = defineProps<{
 	members: any[]
 }>()
 
-const emit = defineEmits(['edit-organization', 'manage-members', 'members-updated', 'organization-updated'])
-
-const converting = ref(false)
-
-const handleConvertToStandard = async () => {
-	if (!confirm('Convert this trial organization to a standard organization? This will keep all existing data.')) {
-		return
-	}
-
-	converting.value = true
-	try {
-		await confirmPassword()
-		const planId = prompt('Enter the plan ID to assign:')
-		if (!planId) return
-		const validity = prompt('Enter subscription validity (e.g. "1 year"):')
-		if (!validity) return
-
-		await axios.post(generateOcsUrl(`apps/organization/organizations/${props.organization.id}/convert-trial`), {
-			planId: parseInt(planId, 10),
-			validity,
-		})
-		emit('organization-updated', { type: 'standard' })
-	} catch (error) {
-		console.error('Failed to convert trial organization', error)
-	} finally {
-		converting.value = false
-	}
-}
+const emit = defineEmits(['edit-organization', 'manage-members', 'members-updated', 'organization-updated', 'convert-trial'])
 
 const contactFullName = computed(() => {
 	const first = props.organization.contactFirstName || ''
