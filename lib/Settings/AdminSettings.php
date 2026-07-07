@@ -6,7 +6,7 @@ namespace OCA\Organization\Settings;
 
 use OCP\AppFramework\Http\TemplateResponse;
 use OCP\Settings\ISettings;
-use OCP\IInitialState;
+use OCP\AppFramework\Services\IInitialState;
 
 use OCA\Organization\Service\TrialOrganizationService;
 

@@ -10,7 +10,7 @@ use OCP\AppFramework\Http\NotFoundResponse;
 use OCP\IGroupManager;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\TemplateResponse;
-use OCP\IInitialStateService;
+use OCP\AppFramework\Services\IInitialState;
 use OCP\IRequest;
 use OCP\IUserSession;
 use OCP\Util;
@@ -20,7 +20,7 @@ class PageController extends Controller {
     public function __construct(
         string $appName,
         IRequest $request,
-        private IInitialStateService $initialStateService,
+        private IInitialState $initialState,
         private IUserSession $userSession,
         private IGroupManager $groupManager,
         private UserMapper $userMapper,
@@ -45,7 +45,7 @@ class PageController extends Controller {
             return new NotFoundResponse();
         }
 
-        $this->initialStateService->provideInitialState($this->appName, 'settings', [
+        $this->initialState->provideInitialState('settings', [
             'appId' => $this->appName,
             'permissions' => [
                 'isGlobalAdmin' => $isGlobalAdmin,

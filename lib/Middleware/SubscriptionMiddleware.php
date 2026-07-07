@@ -1,5 +1,8 @@
 <?php
 
+declare(strict_types=1);
+
+
 namespace OCA\Organization\Middleware;
 
 use DateTime;
@@ -115,7 +118,7 @@ class SubscriptionMiddleware extends Middleware
      */
     private function isPublicRoute($controller, $methodName): bool
     {
-        if ($this->reflector->hasAnnotation('NoLoginRequired')) {
+        if ($this->reflector->hasAnnotationOrAttribute('NoLoginRequired', \OCP\AppFramework\Http\Attribute\PublicPage::class)) {
             return true;
         }
         if (
